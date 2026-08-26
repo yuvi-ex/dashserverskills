@@ -566,6 +566,7 @@ FILTERS = $filters
 SCHEMA, TABLE = $schema_r, $table_r
 HAS_TIME = $has_time
 TIME_EXPR = $time_expr
+MODEL_READY = bool(_LLM.read_key()[0])
 ENTITY_NOUN = $entity_noun
 REFUSED = $refused
 NEGATIVES = $negatives
@@ -1639,8 +1640,24 @@ def create_dash_app(server, url_base_pathname, metadata):
         html.H2("Ask the data", style=H2),
         html.Div("Answers are generated as SQL, checked, then run read-only. "
                  "The query is always shown.",
-                 style={"fontSize": "11.5px", "color": MUTED, "margin": "0.5rem 0 0.75rem",
+                 style={"fontSize": "11.5px", "color": MUTED, "margin": "0.5rem 0 0.4rem",
                         "lineHeight": 1.5}),
+        # Whoever installs this next needs to know the model is optional, that it
+        # is theirs to supply, and where to put it -- from inside the app, not
+        # from a README they may never open.
+        html.Div([
+            html.Span("No model key configured, so questions are matched on "
+                      "keywords: plurals, synonyms and intent words such as "
+                      "why or worst will not work. "),
+            html.Span("Add your own Anthropic key with ", style={"opacity": 0.9}),
+            html.Code("./setup-llm-key.sh", style={"fontSize": "10.5px",
+                      "background": PAGE, "padding": "0.05rem 0.25rem",
+                      "borderRadius": "4px", "border": "1px solid " + LINE}),
+            html.Span(" — no restart needed."),
+        ], style={"fontSize": "11px", "color": WARN, "backgroundColor": WARN_BG,
+                  "padding": "0.45rem 0.6rem", "borderRadius": "8px",
+                  "margin": "0 0 0.75rem", "lineHeight": 1.5,
+                  "display": "none" if MODEL_READY else "block"}),
         dcc.Input(id="q-input", type="text", debounce=True,
                   placeholder=f"e.g. {pretty(MEASURES[0]) if MEASURES else 'total'} by "
                               f"{pretty(DIMS[0]) if DIMS else 'group'}",
@@ -1952,6 +1969,24 @@ def main() -> None:
     open(os.path.join(args.out, "requirements.txt"), "w").write(
         "dash>=4.0,<5.0\nplotly>=5.18\npyexasol>=2.2.2,<3.0\nanthropic>=1.0\n")
     print(f"workspace written to {args.out}: {len(queries)} queries + app.py + manifest")
+
+    # Ask at the moment it matters. A new user reaches this line on their first
+    # dashboard; a note in a README they may never open does not reach them.
+    key_file = os.path.join(os.environ.get("EXAKIT_HOME",
+                            os.path.join(os.path.expanduser("~"), ".exasol-starter-kit")),
+                            "credentials", "anthropic_api_key")
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.path.exists(key_file)):
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        print()
+        print("  No model key is configured, so this dashboard's Ask-the-data panel")
+        print("  will match keywords: plurals, synonyms and words like why or worst")
+        print("  will not work. It is optional -- everything else runs without it.")
+        print()
+        print(f"  To enable semantic text-to-SQL, add your own Anthropic key:")
+        print(f"      {os.path.join(here, 'setup-llm-key.sh')}")
+        print("  Get a key at https://console.anthropic.com  (a question costs")
+        print("  a fraction of a cent). No restart needed; it is read per question.")
+        print()
 
 
 if __name__ == "__main__":

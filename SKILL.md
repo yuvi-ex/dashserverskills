@@ -64,6 +64,11 @@ dimension and every period is noise. Cut it, and report the finding.
 Scaffold with `app_create_exasol_dashboard` **before** writing the built
 files: the builder does not emit `dash_server_exasol.py` and app creation
 fails without it. Prerequisites and the full recipe → `DEPLOY.md`.
+
+If the build prints that no model key is configured, tell the user — the
+Ask-the-data panel falls back to keyword matching, and the key is theirs to
+supply with `setup-llm-key.sh`. Never use a key of your own on their behalf,
+and never ask them to paste one into a chat.
 Shared design tokens and helpers so every dashboard reads as one system.
 
 ## Non-negotiables
