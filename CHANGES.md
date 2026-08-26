@@ -161,3 +161,38 @@ Against the live database, not by inspection:
     Neither the launcher (`~/.local/bin/dash-server`) nor the LaunchAgent plist
     was edited: `exakit update dash-server` regenerates both, so a change there
     would be silently reverted on the next kit update.
+
+## Second sweep — found while demo-testing on Walmart weekly sales
+
+15. **`build_dashboard.py` — names were matched raw but displayed prettified.**
+    The column is `Weekly_Sales`; the panel prints "Weekly Sales". Matching
+    compared the question against the raw name, so "what is the overall weekly
+    sales" could never match — and the refusal then listed the prettified names,
+    asking the reader to type the words they had just typed. Names are now
+    compared on their words, padded so `Sales` cannot match inside `wholesales`.
+
+16. **`build_dashboard.py` — "top 5" was read as a dimension value.**
+    `Store` runs 1-45 and `Pclass` 1-3, so "top 5 store by weekly sales"
+    filtered to store 5 ($45M) instead of ranking (store 20, $301M); "top 3
+    survived by pclass" returned Pclass 3. Four of six dashboards. A row limit
+    is now stripped before value matching, and a bare number counts as a value
+    only when the question also names its column ("store 5" yes, "top 5" no).
+
+17. **`build_dashboard.py` — the cards and the chat used different windows.**
+    KPI cards report a trailing twelve months; the chat panel answered over all
+    history. On the Walmart set that put **$2.5B** on a card and **$6.7B** in the
+    panel under the same label, with nothing on screen to explain the gap. Both
+    numbers were correct and the page was incoherent. The chat now applies the
+    same window, says so, and the reconciled figure is $2,544,229,137.75.
+
+18. **`build_dashboard.py` — the period now travels with the number.**
+    Each KPI card carries its own window ("Nov 2011 - Oct 2012") under the
+    label, rather than the page header alone carrying it. Year rollover
+    verified; a dataset with no temporal column shows no period rather than an
+    invented one.
+
+19. **`build_dashboard.py` — the concentration insight called everything
+    "accounts".** A Walmart dashboard read "the ten largest of 45 accounts".
+    The noun is now derived from the entity in play — stores, customers,
+    orders, cabins — preferring a dimension with enough members for a ranking
+    to mean anything.

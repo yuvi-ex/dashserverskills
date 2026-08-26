@@ -12,8 +12,29 @@ Nothing here is dataset-specific: every table, column, cast and filter comes
 from the card.
 """
 from __future__ import annotations
-import argparse, json, os
+import argparse, json, os, re
 from string import Template
+
+
+def entity_noun(model) -> str:
+    """What the concentration insight should call the things it is counting.
+
+    Hardcoding "accounts" puts "the ten largest of 45 accounts" on a dashboard
+    whose entities are stores.
+    """
+    # "the ten largest of 2 week types" is not a ranking. Prefer a dimension
+    # with enough members for concentration to mean anything.
+    column = next(iter(model.entities or []), None)
+    if column is None:
+        ranked = sorted((c for c in model.dims if (c.get("distinct") or 0) >= 5),
+                        key=lambda c: -(c.get("distinct") or 0))
+        column = next(iter(ranked), None) or next(iter(model.dims or []), None)
+    if not column:
+        return "accounts"
+    name = re.sub(r"^[A-Z]{1,3}_", "", str(column["name"]))
+    text = re.sub(r"[_\-]+", " ", name).strip().lower()
+    text = re.sub(r"\s*\b(id|key|no|number|code)\b\s*$", "", text).strip() or text
+    return text if text.endswith("s") else text + "s"
 
 
 def measure_kind(column: dict) -> str:
@@ -544,6 +565,8 @@ VALUES = $values
 FILTERS = $filters
 SCHEMA, TABLE = $schema_r, $table_r
 HAS_TIME = $has_time
+TIME_EXPR = $time_expr
+ENTITY_NOUN = $entity_noun
 REFUSED = $refused
 NEGATIVES = $negatives
 CUT_METRICS = $cut
@@ -602,12 +625,38 @@ def delta_pill(pct, good_when_up=True):
                             "padding": "0.15rem 0.45rem", "borderRadius": "999px"})
 
 
-def kpi_tile(label, value, index, delta=None, note=None, good_when_up=True):
+def window_label(asof):
+    \"\"\"The period a KPI covers, on the KPI itself.
+
+    Every headline is a trailing twelve months, but only the page header said so.
+    A reader who totals the same measure elsewhere gets a different number and no
+    way to see why.
+    \"\"\"
+    if not HAS_TIME or not asof:
+        return None
+    text = str(asof)[:10]
+    try:
+        year, month, day = (int(part) for part in text.split("-"))
+    except ValueError:
+        return f"12 months to {text}"
+    names = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    start_month, start_year = month + 1, year - 1
+    if start_month > 12:
+        start_month, start_year = start_month - 12, start_year + 1
+    return f"{names[start_month - 1]} {start_year} - {names[month - 1]} {year}"
+
+
+def kpi_tile(label, value, index, delta=None, note=None, good_when_up=True, period=None):
     accent = SERIES[index % len(SERIES)]
     body = [html.Div(label, style={"fontSize": "11.5px", "color": MUTED, "fontWeight": 600,
-                                   "letterSpacing": "0.04em", "textTransform": "uppercase"}),
-            html.Div(value, style={"fontSize": "31px", "fontWeight": 700, "color": INK,
-                                   "margin": "0.35rem 0 0.45rem", "letterSpacing": "-0.02em"})]
+                                   "letterSpacing": "0.04em", "textTransform": "uppercase"})]
+    if period:
+        body.append(html.Div(period, style={"fontSize": "10.5px", "color": MUTED,
+                                            "marginTop": "0.15rem", "opacity": 0.85}))
+    body.append(html.Div(value, style={"fontSize": "31px", "fontWeight": 700, "color": INK,
+                                       "margin": "0.35rem 0 0.45rem",
+                                       "letterSpacing": "-0.02em"}))
     row = []
     if delta is not None:
         row.append(delta_pill(delta, good_when_up))
@@ -838,7 +887,7 @@ def make_figures(kpi, trend, comp, conc, headline_measure):
                 textfont={"color": INK_2, "size": 11}, hoverinfo="skip"))
         kfig.update_layout(showlegend=False, hovermode="closest",
                            margin={"l": 62, "r": 110, "t": 52, "b": 46})
-        kfig.update_xaxes(title={"text": "accounts, largest first",
+        kfig.update_xaxes(title={"text": ENTITY_NOUN + ", largest first",
                                  "font": {"size": 11, "color": MUTED}})
     else:
         kfig = empty_fig("No entity breakdown available.", 300)
@@ -1150,7 +1199,7 @@ def build_insights(kpi, trend, comp, conc=None, cross=None):
         values = sorted((_f(r.get("SHARE_VALUE")) for r in conc), reverse=True)
         total = sum(values) or 1
         top10 = sum(values[:10]) / total * 100
-        add(f"The ten largest of {len(values):,} accounts hold {top10:.1f}% of "
+        add(f"The ten largest of {len(values):,} {ENTITY_NOUN} hold {top10:.1f}% of "
             f"{pretty(headline)}.",
             "bad" if top10 >= 40 else ("warn" if top10 >= 25 else "good"),
             meaning=(f"Losing one of the top ten would move the total by roughly "
@@ -1209,7 +1258,19 @@ QUESTION_NOISE = {"what", "whats", "what's", "is", "are", "the", "a", "an", "of"
                   "per", "vs", "versus", "on", "at", "from", "with", "value", "values",
                   "please", "do", "we", "our", "there", "this", "that", "it", "was",
                   "average", "avg", "mean", "sum", "sums", "count", "over", "last",
-                  "each", "all", "any", "which", "who", "where", "when", "have"}
+                  "each", "all", "any", "which", "who", "where", "when", "have",
+                  "overall", "total", "across", "per", "give", "tell", "get"}
+
+
+def norm(text):
+    \"\"\"Compare names on their words, not their punctuation.
+
+    The panel *displays* "Weekly Sales" but the column is "Weekly_Sales", so raw
+    matching could never match what the reader was told to type -- the refusal
+    then asked for the exact words they had just used. Pad with spaces so a name
+    matches on whole words: "Sales" must not match inside "wholesales".
+    \"\"\"
+    return " " + re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip() + " "
 
 
 def match_values(text):
@@ -1218,12 +1279,20 @@ def match_values(text):
     "APAC" is a value of Market, not a column. Matching only column names lets a
     question's actual subject fall on the floor.
     \"\"\"
+    # "top 5" is a row limit, not a value. Strip it before matching, or a
+    # dimension whose values are numbers (Store 1-45, Pclass 1-3) turns
+    # "top 5 store by sales" into a filter on store 5.
+    text = re.sub(r"\\btop\\s+\\d{1,3}\\b", " ", text)
     hits, taken = [], set()
     for column, values in VALUES.items():
         best = None
         for value in values:
             low = value.lower()
             if low in taken or not low:
+                continue
+            # A bare number is only a value if the question also names its
+            # column ("store 5"); otherwise it is a quantity, a year, a rank.
+            if low.isdigit() and norm(column) not in norm(text):
                 continue
             if re.search(r"\\b" + re.escape(low) + r"\\b", text) and (
                     best is None or len(low) > len(best[1])):
@@ -1259,15 +1328,17 @@ def answer_question(server, metadata, text):
 
     # Longest name wins: "Category" is a substring of "Sub-Category", so first-match
     # order would answer a question about sub-categories with categories.
-    measure = max((m for m in MEASURES + RATES if m.lower() in t), key=len, default=None)
+    question = norm(t)
+    measure = max((m for m in MEASURES + RATES if norm(m) in question),
+                  key=len, default=None)
     # CHAT_DIMS, not DIMS: this fallback emits a single-table query, so naming a
     # column that lives on a joined table would produce "object not found".
-    dim = max((d for d in CHAT_DIMS if d.lower() in t), key=len, default=None)
+    dim = max((d for d in CHAT_DIMS if norm(d) in question), key=len, default=None)
     hits = match_values(t)
     # A value pins the row set; grouping by the column it came from would just
     # restate the filter, so drop that grouping.
     if dim and any(column == dim for column, _ in hits):
-        dim = max((d for d in CHAT_DIMS if d.lower() in t
+        dim = max((d for d in CHAT_DIMS if norm(d) in question
                    and not any(c == d for c, _ in hits)), key=len, default=None)
     n = 10
     match = re.search(r"top\\s+(\\d{1,3})", t)
@@ -1278,6 +1349,12 @@ def answer_question(server, metadata, text):
     tick = chr(39)
     where = [f'"{column}" = {tick}{value.replace(tick, tick * 2)}{tick}'
              for column, value in hits]
+    # The KPI cards report a trailing 12 months. Answering the same question
+    # over all history puts two different numbers under one label on one page.
+    windowed = bool(HAS_TIME and TIME_EXPR)
+    if windowed:
+        where.append(f"{TIME_EXPR} > ADD_MONTHS("
+                     f"(SELECT MAX({TIME_EXPR}) FROM {src}), -12)")
     ignored = leftover_terms(t, measure, dim, hits)
 
     if not MEASURES:
@@ -1313,9 +1390,12 @@ def answer_question(server, metadata, text):
         return None, sql, f"Template SQL {guard_error}.", None
 
     note = None
+    if windowed:
+        note = "Last 12 months, the same window as the cards above."
     if model_error:
         # Falling back silently made a broken model path look like a working one.
-        note = f"The model path is configured but did not answer: {model_error}. " \
+        note = ((note + " ") if note else "") + \
+               f"The model path is configured but did not answer: {model_error}. " \
                "This answer came from template matching instead."
     if ignored:
         note = ((note + " ") if note else
@@ -1630,18 +1710,21 @@ def create_dash_app(server, url_base_pathname, metadata):
         scope = " · ".join([(values[i] or "All " + pretty(n))
                             for i, n in enumerate(FILTERS)]) or "All data"
         asof = kpi.get("ASOF")
-        caption = ((f"As of {str(asof)[:10]}  ·  " if asof else "") +
+        caption = ((f"As of {str(asof)[:10]}, last 12 months  ·  " if asof else "") +
                    f"{int(_f(kpi.get('ROWS_N'))):,} rows  ·  {scope}")
 
         tiles = []
+        period = window_label(kpi.get("ASOF"))
         for i, name in enumerate(MEASURES):
             cur, pri = _f(kpi.get(f"M{i}_CUR")), _f(kpi.get(f"M{i}_PRI"))
             tiles.append(kpi_tile(pretty(name), fmt(cur, name), i,
                                   ((cur / pri - 1) * 100) if pri else None,
-                                  f"prior {fmt(pri, name)}" if pri else None))
+                                  f"prior {fmt(pri, name)}" if pri else None,
+                                  period=period))
         for j, name in enumerate(RATES):
             tiles.append(kpi_tile(pretty(name), fmt_rate(kpi.get(f"R{j}_CUR"), name),
-                                  len(MEASURES) + j, None, "averaged, never summed"))
+                                  len(MEASURES) + j, None, "averaged, never summed",
+                                  period=period))
 
         findings = build_insights(kpi, trend, comp, conc, cross)
         insights = [insight_card(f) for f in findings]
@@ -1704,7 +1787,7 @@ def create_dash_app(server, url_base_pathname, metadata):
         scope = " · ".join([(values[i] or "All " + pretty(n))
                             for i, n in enumerate(FILTERS)]) or "All data"
         asof = kpi.get("ASOF") if kpi and not has_error(kpi) else None
-        caption = ((f"As of {str(asof)[:10]} &middot; " if asof else "") +
+        caption = ((f"As of {str(asof)[:10]}, last 12 months &middot; " if asof else "") +
                    f"{int(_f((kpi or {}).get('ROWS_N'))):,} rows &middot; {scope}")
         headline_measure = (SERIES_MEASURES[0] if SERIES_MEASURES
                             else (MEASURES[0] if MEASURES else ""))
@@ -1822,7 +1905,10 @@ def main() -> None:
                      if c.get("values")
                      and c.get("_table", m.fact["name"]) == m.fact["name"]}),
         filters=repr([c["name"] for c in m.filters]),
-        has_time=repr(bool(m.time)), refused=repr(refused),
+        has_time=repr(bool(m.time)),
+        time_expr=repr(m.expr(m.time) if m.time else None),
+        entity_noun=repr(entity_noun(m)),
+        refused=repr(refused),
         negatives=repr(plan.get("negative_coverage", [])),
         cut=repr([f"{v['aggregation']}({v['measure']})" for v in signal.get("cut", [])]),
         catalog=repr([{"table": m.fact["name"], "name": c["name"],
