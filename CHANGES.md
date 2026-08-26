@@ -196,3 +196,22 @@ Against the live database, not by inspection:
     The noun is now derived from the entity in play — stores, customers,
     orders, cabins — preferring a dimension with enough members for a ranking
     to mean anything.
+
+## Making the model key discoverable
+
+20. **`setup-llm-key.sh` — nothing ever asked for a key.**
+    Semantic text-to-SQL was reachable only by someone who read to the end of a
+    README, which is how a key ends up pasted into a chat window. The script
+    prompts with hidden input, rejects anything that is not `sk-ant-`, writes
+    the file `600`, and never echoes or logs it. Skipping is a supported
+    answer: the dashboards work, the panel falls back to keyword matching.
+
+21. **The build and the app both say when no model is configured.**
+    `build_dashboard.py` prints what is missing, what it costs and where to get
+    a key at the moment a user builds their first dashboard — the one step
+    nobody can skip. The Ask-the-data panel repeats it for whoever was handed a
+    URL rather than a terminal. Both are silent once a key exists.
+
+    **Every user supplies their own key.** A shared key in a public repository
+    is scraped and billed to whoever committed it, and there is no way to
+    delegate an Anthropic key safely.
