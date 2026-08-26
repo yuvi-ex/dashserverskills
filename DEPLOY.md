@@ -12,10 +12,30 @@ folder, so read this before handing it to someone else.
 | Data loaded in a schema | the card is built from a live database, never from a file | `exakit status` lists datasets |
 | `dash-server` add-on, running | hosts the dashboard and exposes the MCP control plane | `exakit status` shows `dash-server: running` |
 | The `dash-server` skill | stage 6 drives the control plane through it | listed in the agent's skills |
-| `ANTHROPIC_API_KEY` (optional) | semantic text-to-SQL; without it the panel falls back to template matching | see CHANGES.md item 14 |
+| Anthropic API key (optional) | **semantic** text-to-SQL; without it the panel falls back to keyword matching, which fails on plurals, synonyms and intent words | run `./setup-llm-key.sh` |
 
 The SQL this skill emits is **Exasol dialect** (`TO_DATE`, `ADD_MONTHS`,
 `DAYS_BETWEEN`). It is portable across datasets, not across databases.
+
+## Set up the model key when you install
+
+Run this once, at install time — not after someone has pasted a key into a chat
+window:
+
+```sh
+./setup-llm-key.sh
+```
+
+It prompts with the input hidden, refuses anything that is not an `sk-ant-` key,
+writes it `600`, and never echoes or logs it. Pressing Enter skips: the
+dashboards still work, and the Ask-the-data panel falls back to keyword matching.
+
+A key belongs in a file rather than the environment because dash-server is
+started by a boot entry that carries no environment — a key exported in a login
+shell never reaches it. The kit resolves its database password the same way. The
+key is read per question, so adding one later needs no restart.
+
+**If a key is ever pasted into a chat, an issue, or a screen share, rotate it.**
 
 ## The deploy recipe — scaffold first, then overwrite
 

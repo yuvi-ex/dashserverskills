@@ -39,7 +39,10 @@ Full checklist in **`DEPLOY.md`** — the short version:
 3. **The dash-server add-on** — `EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace`
    (never installed by default)
 4. **This skill** — unzip into `.claude/skills/`
-5. **An AI client with shell access** (Claude Code). This skill is
+5. **A model key, for semantic text-to-SQL** — `./setup-llm-key.sh`.
+   Optional but strongly recommended: without it the Ask-the-data panel matches
+   keywords, and fails on plurals, synonyms and intent words.
+6. **An AI client with shell access** (Claude Code). This skill is
    *agent-operated*: something has to run `exapump`, run the pipeline, and drive
    dash-server's control plane. A chat-only client cannot use it.
 
