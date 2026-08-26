@@ -567,6 +567,7 @@ SCHEMA, TABLE = $schema_r, $table_r
 HAS_TIME = $has_time
 TIME_EXPR = $time_expr
 MODEL_READY = bool(_LLM.read_key()[0])
+SETUP_KEY_CMD = $setup_key_cmd
 ENTITY_NOUN = $entity_noun
 REFUSED = $refused
 NEGATIVES = $negatives
@@ -1649,11 +1650,13 @@ def create_dash_app(server, url_base_pathname, metadata):
             html.Span("No model key configured, so questions are matched on "
                       "keywords: plurals, synonyms and intent words such as "
                       "why or worst will not work. "),
-            html.Span("Add your own Anthropic key with ", style={"opacity": 0.9}),
-            html.Code("./setup-llm-key.sh", style={"fontSize": "10.5px",
+            html.Span("To enable it, open a terminal and run ", style={"opacity": 0.9}),
+            html.Code(SETUP_KEY_CMD, style={"fontSize": "10.5px",
                       "background": PAGE, "padding": "0.05rem 0.25rem",
                       "borderRadius": "4px", "border": "1px solid " + LINE}),
-            html.Span(" — no restart needed."),
+            html.Span(" — it prompts for the key with the input hidden. It must "
+                      "be a real terminal: the prompt cannot read a hidden key "
+                      "from an editor or agent console. No restart needed."),
         ], style={"fontSize": "11px", "color": WARN, "backgroundColor": WARN_BG,
                   "padding": "0.45rem 0.6rem", "borderRadius": "8px",
                   "margin": "0 0 0.75rem", "lineHeight": 1.5,
@@ -1924,6 +1927,9 @@ def main() -> None:
         filters=repr([c["name"] for c in m.filters]),
         has_time=repr(bool(m.time)),
         time_expr=repr(m.expr(m.time) if m.time else None),
+        setup_key_cmd=repr(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'setup-llm-key.sh')),
         entity_noun=repr(entity_noun(m)),
         refused=repr(refused),
         negatives=repr(plan.get("negative_coverage", [])),

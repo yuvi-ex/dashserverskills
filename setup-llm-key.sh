@@ -21,6 +21,21 @@ if [ -f "$FILE" ]; then
 fi
 
 mkdir -p "$DIR"
+
+# A hidden prompt needs a real terminal. Editor and agent consoles hand this
+# script a pipe, `read` returns an empty line immediately, and the run looks
+# like the user chose to skip -- so say what actually happened instead.
+if [ ! -t 0 ]; then
+    echo "This needs a real terminal: standard input is not a TTY, so the"
+    echo "hidden key prompt cannot be read here (an editor or agent console"
+    echo "will do this). Nothing was written."
+    echo
+    SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+    echo "Open Terminal and run:"
+    echo "    $SELF"
+    exit 2
+fi
+
 printf 'Anthropic API key (input hidden, or press Enter to skip): '
 stty -echo 2>/dev/null || true
 read -r key

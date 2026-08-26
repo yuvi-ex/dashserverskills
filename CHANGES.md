@@ -1,3 +1,39 @@
+# Install is now one command, and the key prompt happens at install time
+
+Three defects, all with the same root: the model key was documented rather than
+collected, so it was routinely never set.
+
+1. **`install.sh` (new).** Clone then run it in a terminal. It installs the
+   skill where the agent looks for it — `DEPLOY.md` noted that `.claude/` is
+   gitignored so cloning does not deliver the skill, and left the reader to
+   solve it — then prompts for the key with the input hidden, then runs the
+   preflight. One command from clone to ready.
+
+2. **`setup-llm-key.sh` reported success when it could not read input.** Under a
+   non-TTY stdin (an editor or agent console) `read` returns an empty line
+   immediately, so the script took its "user pressed Enter to skip" branch and
+   exited 0. Indistinguishable from a deliberate skip. It now detects
+   `[ ! -t 0 ]`, explains that a hidden prompt needs a real terminal, prints its
+   own absolute path, writes nothing, and exits 2.
+
+3. **The in-app notice pointed at `./setup-llm-key.sh`.** A relative path, shown
+   in a browser, with no working directory — unusable. `build_dashboard.py` now
+   threads the repo-root absolute path into the generated app as
+   `SETUP_KEY_CMD`, and the notice says the command must be run in a real
+   terminal.
+
+**`preflight.sh` (new)** checks exapump, the `starter-kit` profile, dash-server's
+HTTP page, its MCP control plane, the key file and its mode, and python3 —
+each with the exact fix command. Exit 0 ready, exit 1 blocking.
+
+The key is never collected through an agent: a hidden prompt cannot be read
+without a TTY, and a key pasted into a transcript has to be rotated.
+
+Verified on 2026-08-26: install into a temp skills dir, non-TTY key step refuses
+cleanly, preflight passes 5/6 with the key warning, `support-manager` rebuilt and
+redeployed as revision 3 — healthy, 0 failed probes, new notice text confirmed in
+the live `_dash-layout`.
+
 # persona-metrics — changes, 2026-08-26
 
 Eleven fixes to the metric-derivation pipeline, found while building three

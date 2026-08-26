@@ -12,6 +12,31 @@ the personas someone remembered to write down, on the schemas they had in mind.
 This runs a procedure instead, so an arbitrary persona meets an arbitrary
 dataset and the answer is derived rather than recalled.
 
+## Install
+
+Clone, then run this **in a terminal** — once:
+
+```sh
+./install.sh
+```
+
+It installs the skill where the agent looks for it, then prompts for the
+Anthropic API key with the input hidden, and finishes with a preflight.
+
+The key prompt is interactive by design. A hidden prompt cannot be read from an
+editor or agent console, and a key pasted into a chat transcript has to be
+rotated — so the key goes from your keyboard straight to a `600` file and is
+never echoed, logged, or printed. Pressing Enter skips it: the dashboards still
+work, and the Ask-the-data panel falls back to keyword matching until a key is
+present.
+
+Check the machine at any time:
+
+```sh
+./preflight.sh      # exit 0 = ready, exit 1 = something will break
+```
+
+
 ## What you get
 
 A single page, deployed at `http://127.0.0.1:<port>/apps/<name>`:
@@ -131,6 +156,9 @@ universal. The headlines:
 ## Files
 
 ```
+install.sh                one-shot install: skill + key prompt + preflight
+preflight.sh              verify every prerequisite; exit 1 if the demo will break
+setup-llm-key.sh          store the Anthropic key in a 600 file, input hidden
 SKILL.md                  the procedure the agent follows
 README.md                 this file
 DEPLOY.md                 prerequisites and the deploy recipe — read before first use
