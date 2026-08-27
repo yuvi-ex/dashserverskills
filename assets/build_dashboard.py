@@ -1650,13 +1650,19 @@ def create_dash_app(server, url_base_pathname, metadata):
             html.Span("No model key configured, so questions are matched on "
                       "keywords: plurals, synonyms and intent words such as "
                       "why or worst will not work. "),
-            html.Span("To enable it, open a terminal and run ", style={"opacity": 0.9}),
-            html.Code(SETUP_KEY_CMD, style={"fontSize": "10.5px",
+            html.Span("To enable it, copy your Anthropic key and run ",
+                      style={"opacity": 0.9}),
+            html.Code(SETUP_KEY_CMD + " --clipboard", style={"fontSize": "10.5px",
                       "background": PAGE, "padding": "0.05rem 0.25rem",
                       "borderRadius": "4px", "border": "1px solid " + LINE}),
-            html.Span(" — it prompts for the key with the input hidden. It must "
-                      "be a real terminal: the prompt cannot read a hidden key "
-                      "from an editor or agent console. No restart needed."),
+            html.Span(" — that route works anywhere, including an editor or "
+                      "agent console. Run it with no flags in a real terminal "
+                      "for a hidden prompt instead, or pass "),
+            html.Code("--key-file PATH", style={"fontSize": "10.5px",
+                      "background": PAGE, "padding": "0.05rem 0.25rem",
+                      "borderRadius": "4px", "border": "1px solid " + LINE}),
+            html.Span(". Don't paste the key into a chat: one that lands in a "
+                      "transcript has to be rotated. No restart needed."),
         ], style={"fontSize": "11px", "color": WARN, "backgroundColor": WARN_BG,
                   "padding": "0.45rem 0.6rem", "borderRadius": "8px",
                   "margin": "0 0 0.75rem", "lineHeight": 1.5,
@@ -1988,8 +1994,13 @@ def main() -> None:
         print("  will match keywords: plurals, synonyms and words like why or worst")
         print("  will not work. It is optional -- everything else runs without it.")
         print()
-        print(f"  To enable semantic text-to-SQL, add your own Anthropic key:")
-        print(f"      {os.path.join(here, 'setup-llm-key.sh')}")
+        setup = os.path.join(here, "setup-llm-key.sh")
+        print(f"  To enable semantic text-to-SQL, add your own Anthropic key.")
+        print(f"  In a terminal, for a hidden prompt:")
+        print(f"      {setup}")
+        print(f"  Anywhere else (editor or agent console), copy the key first:")
+        print(f"      {setup} --clipboard")
+        print(f"      {setup} --key-file PATH")
         print("  Get a key at https://console.anthropic.com  (a question costs")
         print("  a fraction of a cent). No restart needed; it is read per question.")
         print()

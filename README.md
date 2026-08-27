@@ -20,14 +20,26 @@ Clone, then run this **in a terminal** — once:
 ./install.sh
 ```
 
-It installs the skill where the agent looks for it, then prompts for the
-Anthropic API key with the input hidden, and finishes with a preflight.
+It installs the skill where the agent looks for it, collects the Anthropic API
+key, and finishes with a preflight.
 
-The key prompt is interactive by design. A hidden prompt cannot be read from an
-editor or agent console, and a key pasted into a chat transcript has to be
-rotated — so the key goes from your keyboard straight to a `600` file and is
-never echoed, logged, or printed. Pressing Enter skips it: the dashboards still
-work, and the Ask-the-data panel falls back to keyword matching until a key is
+In a real terminal the key is a hidden prompt. From an editor or agent console —
+where there is no TTY to prompt on — copy the key first and use one of these
+instead; the flags are forwarded to `setup-llm-key.sh`:
+
+```sh
+pbpaste | ./install.sh              # key on the clipboard, piped in
+./install.sh --clipboard            # read the clipboard directly
+./install.sh --key-file PATH        # read it from a file
+```
+
+What none of these do is put the key where it would be captured. A key pasted
+into a chat transcript has to be rotated, so it is never typed into one, never
+passed as an argument (arguments show up in `ps` and in shell history), and
+never echoed, logged, or printed. It goes straight to a `600` file. Add
+`--force` to replace a key already stored. Skipping is still fine: the
+dashboards work, and the Ask-the-data panel falls back to keyword matching
+until a key is
 present.
 
 Check the machine at any time:
@@ -156,9 +168,10 @@ universal. The headlines:
 ## Files
 
 ```
-install.sh                one-shot install: skill + key prompt + preflight
+install.sh                one-shot install: skill + key + preflight
 preflight.sh              verify every prerequisite; exit 1 if the demo will break
-setup-llm-key.sh          store the Anthropic key in a 600 file, input hidden
+setup-llm-key.sh          store the Anthropic key in a 600 file; TTY prompt,
+                          clipboard, --key-file or piped stdin
 SKILL.md                  the procedure the agent follows
 README.md                 this file
 DEPLOY.md                 prerequisites and the deploy recipe — read before first use

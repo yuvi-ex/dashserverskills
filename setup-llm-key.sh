@@ -6,51 +6,129 @@
 # login shell never reaches it. The starter kit resolves its database password
 # the same way.
 #
-# The key is read with `read -s` (never echoed, never in shell history), written
-# with umask 077, and verified to be owner-only afterwards. It is never printed.
+# The key is never echoed, never passed as an argument (arguments are visible in
+# `ps` and land in shell history), never logged. It is written with umask 077 and
+# verified owner-only afterwards.
+#
+# Four intake routes, so an agent or editor console is not a dead end:
+#
+#   setup-llm-key.sh                  hidden prompt        (needs a real TTY)
+#   setup-llm-key.sh --clipboard      read the clipboard   (works anywhere)
+#   setup-llm-key.sh --key-file PATH  read that file       (works anywhere)
+#   pbpaste | setup-llm-key.sh        read piped stdin     (works anywhere)
+#
+# The three non-TTY routes exist because the key must not transit a chat
+# transcript — a key pasted into one has to be rotated. None of them requires
+# the key to be typed where it would be captured.
+#
+# Add --force to replace an existing key without a confirmation prompt.
 
 set -e
 DIR="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/credentials"
 FILE="$DIR/anthropic_api_key"
 
+SOURCE=""
+KEY_FILE_ARG=""
+FORCE=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --clipboard) SOURCE="clipboard" ;;
+        --key-file)
+            shift
+            [ -n "$1" ] || { echo "--key-file needs a path." >&2; exit 1; }
+            SOURCE="file"; KEY_FILE_ARG="$1" ;;
+        --force) FORCE=1 ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+# Piped stdin is a key source in its own right: `pbpaste | setup-llm-key.sh`.
+# Require an actual pipe or regular file: "not a TTY" alone also covers a closed
+# or empty descriptor, where `cat` blocks forever instead of returning.
+if [ -z "$SOURCE" ] && [ ! -t 0 ] && { [ -p /dev/stdin ] || [ -f /dev/stdin ]; }; then
+    SOURCE="stdin"
+fi
+
 if [ -f "$FILE" ]; then
-    printf 'A key is already stored at %s\n' "$FILE"
-    printf 'Replace it? [y/N] '
-    read -r reply
-    case "$reply" in [Yy]*) ;; *) echo "Left unchanged."; exit 0 ;; esac
+    if [ "$FORCE" -eq 1 ]; then
+        :
+    elif [ -t 0 ] && [ -z "$SOURCE" ]; then
+        printf 'A key is already stored at %s\n' "$FILE"
+        printf 'Replace it? [y/N] '
+        read -r reply
+        case "$reply" in [Yy]*) ;; *) echo "Left unchanged."; exit 0 ;; esac
+    else
+        # No terminal to confirm on, so refuse rather than silently overwrite a
+        # working key.
+        printf 'A key is already stored at %s\n' "$FILE"
+        echo "Re-run with --force to replace it."
+        exit 0
+    fi
 fi
 
 mkdir -p "$DIR"
 
-# A hidden prompt needs a real terminal. Editor and agent consoles hand this
-# script a pipe, `read` returns an empty line immediately, and the run looks
-# like the user chose to skip -- so say what actually happened instead.
-if [ ! -t 0 ]; then
-    echo "This needs a real terminal: standard input is not a TTY, so the"
-    echo "hidden key prompt cannot be read here (an editor or agent console"
-    echo "will do this). Nothing was written."
-    echo
-    SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-    echo "Open Terminal and run:"
-    echo "    $SELF"
-    exit 2
-fi
+key=""
+case "$SOURCE" in
+    clipboard)
+        command -v pbpaste >/dev/null 2>&1 || {
+            echo "No pbpaste on this system; use --key-file PATH instead." >&2
+            exit 1
+        }
+        key=$(pbpaste)
+        [ -n "$key" ] || { echo "The clipboard is empty." >&2; exit 1; }
+        ;;
+    file)
+        [ -f "$KEY_FILE_ARG" ] || { echo "No such file: $KEY_FILE_ARG" >&2; exit 1; }
+        key=$(cat "$KEY_FILE_ARG")
+        ;;
+    stdin)
+        key=$(cat)
+        [ -n "$key" ] || {
+            echo "Nothing arrived on standard input." >&2
+            echo "Try: pbpaste | $0" >&2
+            exit 1
+        }
+        ;;
+    *)
+        # Interactive: a hidden prompt needs a real terminal. Editor and agent
+        # consoles hand this script a pipe -- but that case is handled above as
+        # the stdin route, so reaching here with no TTY means stdin is closed
+        # entirely. Name the routes that do work rather than just refusing.
+        if [ ! -t 0 ]; then
+            SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+            echo "No terminal for the hidden prompt, and nothing on stdin."
+            echo "Any of these work without a terminal:"
+            echo "    pbpaste | $SELF          # copy the key first"
+            echo "    $SELF --clipboard"
+            echo "    $SELF --key-file /path/to/key.txt"
+            exit 2
+        fi
+        printf 'Anthropic API key (input hidden, or press Enter to skip): '
+        stty -echo 2>/dev/null || true
+        read -r key
+        stty echo 2>/dev/null || true
+        printf '\n'
+        if [ -z "$key" ]; then
+            echo "Skipped. The dashboards still work; the Ask-the-data panel"
+            echo "falls back to template matching until a key is present."
+            exit 0
+        fi
+        ;;
+esac
 
-printf 'Anthropic API key (input hidden, or press Enter to skip): '
-stty -echo 2>/dev/null || true
-read -r key
-stty echo 2>/dev/null || true
-printf '\n'
-
-if [ -z "$key" ]; then
-    echo "Skipped. The dashboards still work; the Ask-the-data panel falls back"
-    echo "to template matching until a key is present."
-    exit 0
-fi
+# Trim whitespace and newlines: a clipboard or file copy usually carries a
+# trailing newline, and read_key() would otherwise compare a padded string.
+key=$(printf '%s' "$key" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
 case "$key" in
     sk-ant-*) ;;
-    *) echo "That does not look like an Anthropic key (expected sk-ant-...)."; exit 1 ;;
+    *) echo "That does not look like an Anthropic key (expected sk-ant-...)." >&2
+       echo "Nothing was written." >&2
+       exit 1 ;;
 esac
 
 ( umask 077; printf '%s' "$key" > "$FILE" )

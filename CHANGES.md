@@ -1,3 +1,47 @@
+# The key can now be collected without a terminal
+
+The previous round fixed a script that *lied* about not reading input, but left
+the underlying dead end: a hidden TTY prompt was the only way in. Claude Code's
+`!` prefix and its Bash tool both hand the script a pipe, so from an agent
+console the honest refusal was still a refusal, and `install.sh` skipped the key
+entirely. Text-to-SQL stayed on keyword matching with no reachable way forward.
+
+The constraint was never "the key needs a terminal". It is "the key must not
+transit a chat transcript", since one that does has to be rotated. That rules
+out *typing* the key into a console, not every non-TTY route.
+
+1. **`setup-llm-key.sh` — four intake routes.** The TTY prompt as before, plus
+   `--clipboard` (via `pbpaste`), `--key-file PATH`, and piped stdin
+   (`pbpaste | setup-llm-key.sh`). None requires the key to be typed where it
+   would be captured, and none passes it as an argument — arguments are visible
+   in `ps` and land in shell history. `umask 077` + `chmod 600` unchanged.
+   `--force` replaces an existing key; without a TTY to confirm on, an existing
+   key is left alone rather than silently overwritten.
+
+2. **Piped stdin needs a real pipe.** `[ ! -t 0 ]` is also true for a *closed*
+   descriptor, where `cat` blocks forever. The stdin route now additionally
+   requires `[ -p /dev/stdin ] || [ -f /dev/stdin ]`; a closed descriptor falls
+   through to the message naming the routes that work. Caught by testing
+   `./setup-llm-key.sh --force 0<&-`, which hung for two minutes.
+
+3. **Whitespace is trimmed.** A clipboard or file copy carries a trailing
+   newline, which `read_key()` would otherwise pass to the API padded.
+
+4. **`install.sh` forwards the flags** and no longer skips the key when stdin is
+   not a terminal. It interprets nothing itself, so the two scripts cannot drift
+   on what they accept.
+
+5. **The in-app notice named the one route that could not work** where it is
+   read. The banner and the post-build CLI notice now lead with
+   `--clipboard`, mention `--key-file`, and keep the "don't paste it into a
+   chat" warning as the reason rather than as a dead end.
+
+Verified in a sandboxed `EXAKIT_HOME`: stored via pipe, refused an existing key
+without `--force`, replaced with `--key-file --force`, rejected a non-`sk-ant-`
+value, handled an empty pipe and a closed descriptor, and a full `install.sh`
+run from a pipe installed the skill, stored the key, and turned preflight's
+`model key present and owner-only` check green.
+
 # Install is now one command, and the key prompt happens at install time
 
 Three defects, all with the same root: the model key was documented rather than
