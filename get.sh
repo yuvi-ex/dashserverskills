@@ -50,8 +50,10 @@ fi
 # ---- 2. key, then install, then verify -------------------------------------
 # install.sh owns all three steps so a plain `./install.sh` behaves the same as
 # this bootstrap; here we just ask it to stay quiet.
+# Default, not --quiet: --quiet suppresses the two-line summary, which is the
+# confirmation the whole run exists to produce.
 if [ "$VERBOSE" -eq 1 ]; then
     "$DEST/install.sh" --verbose
 else
-    "$DEST/install.sh" --quiet
+    "$DEST/install.sh"
 fi
