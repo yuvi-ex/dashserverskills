@@ -1,3 +1,43 @@
+# One line from nothing to ready, and four lines of output
+
+`git clone` cannot collect the key. Git has no post-clone hook — by design,
+since it would make every clone remote code execution — so no amount of work
+inside the repo makes a bare `git clone <url>` prompt for anything. The clone
+has to happen inside something that can also ask.
+
+1. **`get.sh` (new).** `sh -c "$(curl -fsSL .../get.sh)"` clones, asks for the
+   key hidden, installs, verifies, prints four lines. Git's progress output is
+   collapsed to one redrawn percentage line instead of its six-line preamble.
+
+2. **The prompt reads `/dev/tty`, not stdin.** A controlling terminal can be
+   opened directly even when stdin is a pipe, which is what lets the bootstrap
+   above still ask interactively. Where there is no controlling terminal the
+   open fails immediately with ENXIO rather than blocking, so it is safe to
+   attempt everywhere.
+
+3. **`read` at EOF aborted the script.** Under `set -e`, Ctrl-D made `read`
+   return non-zero and the script exited 1 having printed nothing and written
+   nothing — indistinguishable from a crash. EOF is now treated as an empty
+   line, which is a skip.
+
+4. **Echo is disabled before the prompt is drawn**, not after, so input typed
+   ahead of the prompt is not echoed in the clear.
+
+5. **Quiet by default.** `install.sh` prints two lines; `--verbose` restores the
+   old step-by-step output and `--quiet` silences it. The key script gained
+   `--quiet` so its guidance does not leak through, and a bad key value now
+   exits 3, distinct from 2 for "no terminal", so the summary can say which
+   happened.
+
+6. **"all checks passed" was reported when checks had not passed.** `preflight.sh`
+   exits 0 on a warning, so testing its exit status called a missing key a pass.
+   The warning lines are counted instead, from a single run.
+
+Verified on a real pty (`pty.fork`, typing only after the prompt appears): the
+key is not echoed, the file is written `0600`, its contents match exactly, and
+the exit code is 0. The non-interactive routes were re-tested for two-line
+output in all three outcomes — key stored, no terminal, bad value.
+
 # The key can now be collected without a terminal
 
 The previous round fixed a script that *lied* about not reading input, but left

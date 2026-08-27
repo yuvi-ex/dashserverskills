@@ -30,6 +30,8 @@ FILE="$DIR/anthropic_api_key"
 SOURCE=""
 KEY_FILE_ARG=""
 FORCE=0
+QUIET=0
+PROMPT='Anthropic API key for text-to-SQL (hidden, Enter to skip): '
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -39,6 +41,7 @@ while [ $# -gt 0 ]; do
             [ -n "$1" ] || { echo "--key-file needs a path." >&2; exit 1; }
             SOURCE="file"; KEY_FILE_ARG="$1" ;;
         --force) FORCE=1 ;;
+        --quiet) QUIET=1 ;;
         -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -51,6 +54,12 @@ done
 if [ -z "$SOURCE" ] && [ ! -t 0 ] && { [ -p /dev/stdin ] || [ -f /dev/stdin ]; }; then
     SOURCE="stdin"
 fi
+
+# A controlling terminal can be opened directly even when stdin is a pipe, which
+# is what lets `sh -c "$(curl ...)"` still ask for the key interactively. Where
+# there is no controlling terminal -- an agent or editor console -- opening it
+# fails immediately with ENXIO rather than blocking, so this is safe to attempt.
+has_tty() { { : < /dev/tty; } 2>/dev/null; }
 
 if [ -f "$FILE" ]; then
     if [ "$FORCE" -eq 1 ]; then
@@ -94,27 +103,38 @@ case "$SOURCE" in
         }
         ;;
     *)
-        # Interactive: a hidden prompt needs a real terminal. Editor and agent
-        # consoles hand this script a pipe -- but that case is handled above as
-        # the stdin route, so reaching here with no TTY means stdin is closed
-        # entirely. Name the routes that do work rather than just refusing.
-        if [ ! -t 0 ]; then
-            SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-            echo "No terminal for the hidden prompt, and nothing on stdin."
-            echo "Any of these work without a terminal:"
-            echo "    pbpaste | $SELF          # copy the key first"
-            echo "    $SELF --clipboard"
-            echo "    $SELF --key-file /path/to/key.txt"
+        # Interactive. Prefer /dev/tty over stdin so the prompt survives being
+        # piped; fall back to stdin when it is itself a terminal.
+        if has_tty; then
+            # Echo goes off before the prompt is drawn: anything already typed
+            # ahead of it would otherwise be echoed in the clear.
+            stty -echo < /dev/tty 2>/dev/null || true
+            printf '%s' "$PROMPT" > /dev/tty
+            # `read` returns non-zero at EOF (Ctrl-D). Under `set -e` that would
+            # abort here with a bare exit 1 and no explanation, so treat EOF as
+            # the same thing as an empty line: a skip.
+            read -r key < /dev/tty || key=""
+            stty echo < /dev/tty 2>/dev/null || true
+            printf '\n' > /dev/tty
+        elif [ -t 0 ]; then
+            stty -echo 2>/dev/null || true
+            printf '%s' "$PROMPT"
+            read -r key || key=""
+            stty echo 2>/dev/null || true
+            printf '\n'
+        else
+            if [ "$QUIET" -eq 0 ]; then
+                SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+                echo "No terminal for the hidden prompt, and nothing on stdin."
+                echo "Any of these work without a terminal:"
+                echo "    pbpaste | $SELF          # copy the key first"
+                echo "    $SELF --clipboard"
+                echo "    $SELF --key-file /path/to/key.txt"
+            fi
             exit 2
         fi
-        printf 'Anthropic API key (input hidden, or press Enter to skip): '
-        stty -echo 2>/dev/null || true
-        read -r key
-        stty echo 2>/dev/null || true
-        printf '\n'
         if [ -z "$key" ]; then
-            echo "Skipped. The dashboards still work; the Ask-the-data panel"
-            echo "falls back to template matching until a key is present."
+            [ "$QUIET" -eq 1 ] || echo "Skipped -- chat falls back to keyword matching."
             exit 0
         fi
         ;;
@@ -126,14 +146,18 @@ key=$(printf '%s' "$key" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*
 
 case "$key" in
     sk-ant-*) ;;
-    *) echo "That does not look like an Anthropic key (expected sk-ant-...)." >&2
-       echo "Nothing was written." >&2
-       exit 1 ;;
+    *) if [ "$QUIET" -eq 0 ]; then
+           echo "That does not look like an Anthropic key (expected sk-ant-...)." >&2
+           echo "Nothing was written." >&2
+       fi
+       exit 3 ;;
 esac
 
 ( umask 077; printf '%s' "$key" > "$FILE" )
 chmod 600 "$FILE"
 key=""
 
-echo "Stored at $FILE (owner-only)."
-echo "No restart needed: the key is read per question."
+if [ "$QUIET" -eq 0 ]; then
+    echo "Stored at $FILE (owner-only)."
+    echo "No restart needed: the key is read per question."
+fi

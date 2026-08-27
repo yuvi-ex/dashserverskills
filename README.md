@@ -17,21 +17,39 @@ dataset and the answer is derived rather than recalled.
 Clone, then run this **in a terminal** — once:
 
 ```sh
-./install.sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.sh)"
 ```
 
-It installs the skill where the agent looks for it, collects the Anthropic API
-key, and finishes with a preflight.
+That clones the repo, asks for the Anthropic key with the input hidden,
+installs the skill and verifies the result — four lines of output:
 
-In a real terminal the key is a hidden prompt. From an editor or agent console —
-where there is no TTY to prompt on — copy the key first and use one of these
-instead; the flags are forwarded to `setup-llm-key.sh`:
+```
+Cloning dashserverskills ... done
+Anthropic API key for text-to-SQL (hidden, Enter to skip):
+Installed persona-metrics · key stored · all checks passed
+Ready -- ask a question in the dashboard chat panel.
+```
+
+`git clone` on its own cannot do this: git has no post-clone hook, by design —
+it would make every clone remote code execution. So the clone has to happen
+inside something that can also ask, which is what `get.sh` is. Cloning by hand
+and running `./install.sh` gives the identical result.
+
+The prompt reads `/dev/tty` rather than stdin, so it still appears when the
+script itself arrives through a pipe. Pressing Enter skips it.
+
+Where there is no terminal at all — an editor or agent console — pass the key
+by a route that keeps it out of the chat transcript, since a key pasted into
+one has to be rotated:
 
 ```sh
 pbpaste | ./install.sh              # key on the clipboard, piped in
 ./install.sh --clipboard            # read the clipboard directly
 ./install.sh --key-file PATH        # read it from a file
 ```
+
+Add `--verbose` for every step, `--quiet` for none, `--force` to replace a key
+already stored.
 
 What none of these do is put the key where it would be captured. A key pasted
 into a chat transcript has to be rotated, so it is never typed into one, never
