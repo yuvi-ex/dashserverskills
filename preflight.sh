@@ -60,7 +60,7 @@ if [ -f "$KEYFILE" ]; then
     fi
 else
     warn "no model key: Ask-the-data falls back to keyword matching" \
-         "run in a terminal: $HERE/setup-llm-key.sh"
+         "copy the key, then: $HERE/setup-llm-key.sh --clipboard"
 fi
 
 # 6. python3, for the pipeline scripts
