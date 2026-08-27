@@ -2,26 +2,14 @@
 
 Build a dashboard from a **role**, not from a list of metrics.
 
-You say *"build a dashboard for the CFO"* — or for a warehouse shift lead, a
-clinical trial coordinator, a head of trust and safety — and this derives what
-that person needs **from the dataset actually in front of it**, then builds and
-deploys a live dashboard on your local Exasol database.
-
-There is no file of pre-written CFO metrics here. A catalogue only answers for
-the personas someone remembered to write down, on the schemas they had in mind.
-This runs a procedure instead, so an arbitrary persona meets an arbitrary
-dataset and the answer is derived rather than recalled.
-
 ## Install
 
-Clone, then run this **in a terminal** — once:
+Paste this into a terminal. It is the whole install — there is nothing to clone
+first:
 
 ```sh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.sh)"
 ```
-
-That clones the repo, asks for the Anthropic key with the input hidden,
-installs the skill and verifies the result — four lines of output:
 
 ```
 Cloning dashserverskills ... done
@@ -30,17 +18,29 @@ Installed persona-metrics · key stored · all checks passed
 Ready -- ask a question in the dashboard chat panel.
 ```
 
-`git clone` on its own cannot do this: git has no post-clone hook, by design —
-it would make every clone remote code execution. So the clone has to happen
-inside something that can also ask, which is what `get.sh` is. Cloning by hand
-and running `./install.sh` gives the identical result.
+It clones the repo, asks for your Anthropic key with the input hidden, installs
+the skill where your agent looks for it, and verifies the result. Press Enter at
+the prompt to skip the key — everything still works, and the chat panel falls
+back to keyword matching until you add one.
 
-The prompt reads `/dev/tty` rather than stdin, so it still appears when the
-script itself arrives through a pipe. Pressing Enter skips it.
+<details>
+<summary>Prefer to clone by hand, or no terminal available?</summary>
 
-Where there is no terminal at all — an editor or agent console — pass the key
-by a route that keeps it out of the chat transcript, since a key pasted into
-one has to be rotated:
+Cloning and running the installer yourself is identical:
+
+```sh
+git clone https://github.com/yuvi-ex/dashserverskills
+cd dashserverskills && ./install.sh
+```
+
+A bare `git clone` on its own installs nothing and cannot prompt you: git runs
+no code on clone, by design — a post-clone hook would make every clone remote
+code execution. That is why the install is a script that clones, rather than a
+clone that runs a script.
+
+Where there is no terminal at all — an editor or agent console — the hidden
+prompt has nothing to draw on, so pass the key by a route that keeps it out of
+the chat transcript, since a key pasted into one has to be rotated:
 
 ```sh
 pbpaste | ./install.sh              # key on the clipboard, piped in
@@ -50,22 +50,17 @@ pbpaste | ./install.sh              # key on the clipboard, piped in
 
 Add `--verbose` for every step, `--quiet` for none, `--force` to replace a key
 already stored.
+</details>
 
-What none of these do is put the key where it would be captured. A key pasted
-into a chat transcript has to be rotated, so it is never typed into one, never
-passed as an argument (arguments show up in `ps` and in shell history), and
-never echoed, logged, or printed. It goes straight to a `600` file. Add
-`--force` to replace a key already stored. Skipping is still fine: the
-dashboards work, and the Ask-the-data panel falls back to keyword matching
-until a key is
-present.
+You say *"build a dashboard for the CFO"* — or for a warehouse shift lead, a
+clinical trial coordinator, a head of trust and safety — and this derives what
+that person needs **from the dataset actually in front of it**, then builds and
+deploys a live dashboard on your local Exasol database.
 
-Check the machine at any time:
-
-```sh
-./preflight.sh      # exit 0 = ready, exit 1 = something will break
-```
-
+There is no file of pre-written CFO metrics here. A catalogue only answers for
+the personas someone remembered to write down, on the schemas they had in mind.
+This runs a procedure instead, so an arbitrary persona meets an arbitrary
+dataset and the answer is derived rather than recalled.
 
 ## What you get
 
@@ -186,6 +181,7 @@ universal. The headlines:
 ## Files
 
 ```
+get.sh                    the curl one-liner: clone + key + install + verify
 install.sh                one-shot install: skill + key + preflight
 preflight.sh              verify every prerequisite; exit 1 if the demo will break
 setup-llm-key.sh          store the Anthropic key in a 600 file; TTY prompt,
