@@ -1,3 +1,79 @@
+# Batched queries, and one implementation for every platform
+
+Two problems, both measured rather than assumed.
+
+**Profiling was 91% process startup.** Every query was its own `exapump`
+process: 63 of them for TPCH, 8.7s, of which 8.0s was spawning. The median
+query took 0.12s against a bare `SELECT 1` baseline of 0.13s, so the queries
+were free and the process was the whole cost.
+
+1. **`assets/db.py` (new)** batches statements through one process. 200
+   statements run in 1.1s where they used to cost ~26s.
+
+2. **Failure had to survive batching.** `exapump` aborts the rest of a batch at
+   the first failing statement, and callers depend on a single failed probe
+   being survivable — `signal_check.py` tests dimensions that may not be
+   comparable. `run_many` records the failed index, re-runs the remainder, and
+   repeats: one process when nothing fails, and never worse than the old
+   one-process-per-query behaviour when everything does.
+
+3. **`profile_schema.py` runs a fixpoint.** Its queries are not independent —
+   the catalog decides which columns get profiled, and text re-typing decides
+   which get profiled again — so it walks the whole build collecting SQL,
+   batches it, and walks again. Each round resolves one dependency layer.
+   **TPCH: 63 processes to 2, 8.7s to 1.9s, card byte-identical.**
+   `signal_check.py` does the same in a single pass: **1 process, 0.48s.**
+
+**The skill assumed POSIX.** Three defects were correct on macOS and silently
+wrong on Windows:
+
+4. **Encoding.** `build_dashboard.py` emits em-dashes and arrows, and its 12
+   `open()` calls named no encoding, so on a cp1252 machine the build died with
+   `UnicodeEncodeError` partway through writing `app.py`. Every read and write
+   is explicit UTF-8 now.
+
+5. **The key could never be read on Windows.** The generated `llm_sql.py`
+   rejected any key file whose `S_IRGRP|S_IROTH` bits were set — but Python
+   synthesises `st_mode` as `0o666` for every regular file on Windows, so the
+   guard rejected *every* key and told the user to run `chmod 600`, which
+   cannot change an NTFS ACL. The check is now POSIX-only.
+
+6. **The SQL guard refused valid SQL.** `EXTRACT(YEAR FROM "T"."C")` was parsed
+   as a table reference, giving "reads from schema T, outside this dashboard".
+   The `FROM` keyword is blanked inside `EXTRACT`/`SUBSTRING`/`TRIM`/`OVERLAY`/
+   `POSITION` before the scan. Cross-schema, unqualified, multi-statement and
+   DDL SQL are still refused.
+
+7. **Historical datasets.** The model answered "last year" with `CURRENT_DATE`,
+   which on TPC-H falls outside the data and returns an empty table that reads
+   like a real answer. The prompt now carries the dataset's own last date.
+
+**Installers: four shell scripts became three Python ones.** `install.sh`,
+`preflight.sh` and `setup-llm-key.sh` are replaced by `install.py`,
+`preflight.py` and `setup_llm_key.py`, with `get.sh` and `get.ps1` as thin
+bootstraps. Python was already a hard dependency, so this is one implementation
+instead of one per shell.
+
+8. **`--clipboard` works off macOS.** It was `pbpaste`-only, so the documented
+   escape hatch for agent consoles did not exist on Linux, WSL or Windows. It
+   now tries `wl-paste`/`xclip`/`xsel`, `powershell.exe Get-Clipboard` under
+   WSL, and `Get-Clipboard` on Windows.
+
+9. **Two preflight checks were wrong, not just unportable.** `command -v exakit`
+   fails in Git Bash because the launcher is `exakit.cmd`; and the key's mode
+   was compared against `-rw-------`, which no Windows file reports. The port
+   uses `shutil.which` and skips mode bits where they mean nothing. The port
+   detector also now reads only lines naming dash-server — scanning for "a
+   port-shaped number" found the database's 8563 and declared dash-server down.
+
+10. **`python3` is no longer assumed.** On Windows that name can resolve to the
+    Microsoft Store stub; `sys.executable` is the interpreter already running.
+
+`DEPLOY.md` gains a platform table and documents one defect this repo cannot
+fix: dash-server's `sql_smoke` probe compares OS-separator paths against
+forward-slash config keys, so `app_deploy_draft` is blocked on Windows. Build,
+check that `data_layer` passes, then `app_promote_revision`.
+
 # One line from nothing to ready, and four lines of output
 
 `git clone` cannot collect the key. Git has no post-clone hook — by design,

@@ -417,14 +417,15 @@ def main() -> None:
     parser.add_argument("--json", metavar="PATH")
     args = parser.parse_args()
 
-    card = json.load(open(args.card))
+    card = json.load(open(args.card, encoding="utf-8"))
     if isinstance(card, list):
         card = card[0]
-    persona = json.load(open(args.persona))
+    persona = json.load(open(args.persona, encoding="utf-8"))
     result = derive(card, persona)
     print(render(result))
     if args.json:
-        json.dump(result, open(args.json, "w"), indent=2, default=str)
+        json.dump(result, open(args.json, "w", encoding="utf-8"),
+                  indent=2, default=str)
     sys.exit(0 if result["buildable"] else 3)
 
 

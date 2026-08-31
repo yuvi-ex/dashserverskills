@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
-import subprocess
 import sys
 from collections import defaultdict
 
-EXAPUMP = "exapump"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db  # noqa: E402  -- batching executor, see assets/db.py
 
 # Above this row count, profile a bounded subquery instead of the whole table.
 DEFAULT_SAMPLE_ROWS = 200_000
@@ -118,24 +119,74 @@ def hits(hint: str, name: str) -> bool:
 # --------------------------------------------------------------------------
 # SQL plumbing
 # --------------------------------------------------------------------------
-def run_sql(sql: str) -> list[dict]:
-    """Run one SELECT through exapump and return rows as dicts."""
-    proc = subprocess.run(
-        [EXAPUMP, "sql", "-f", "json", sql],
-        capture_output=True, text=True, timeout=600,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"query failed: {proc.stderr.strip()[:400]}\nSQL: {sql[:400]}")
-    text = proc.stdout
-    start = text.find("\n[")
-    if start == -1:
-        start = text.find("[")
-        if start == -1:
+class _Batch:
+    """Cache of SQL -> rows, filled a whole dependency layer at a time.
+
+    Profiling used to be one `exapump` process per query: 63 of them for TPCH,
+    8.5s, of which 8.0s was process startup rather than query work.
+
+    Batching here is harder than in signal_check.py because the queries are not
+    independent -- the catalog decides which columns get profiled, and text
+    re-typing decides which columns get profiled *again*. So instead of two
+    passes this runs a fixpoint: walk the whole build, collecting the SQL it
+    asks for and handing back nothing; batch everything new; walk again. Each
+    round resolves one more dependency layer, so the number of rounds is the
+    depth of the chain (a handful), not the number of queries.
+
+    `build_card` is a pure function of these results -- it rebuilds its state
+    from `load_catalog` on every call -- which is what makes re-walking safe.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.cache: dict[str, db.Result] = {}
+        self.pending: list[str] = []
+        self.mode = "replay"
+        self.live_fetches = 0
+        self.rounds = 0
+
+    def sql(self, statement: str) -> list[dict]:
+        if self.mode == "collect" and statement not in self.cache:
+            # Unknown: record it and hand back nothing so the walk carries on
+            # far enough to reveal what it would ask for next.
+            if statement not in self.pending:
+                self.pending.append(statement)
             return []
-    try:
-        return json.loads(text[start:].strip())
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"could not parse exapump output: {exc}\n{text[-400:]}") from exc
+        # Cached statements answer for real even while collecting -- that is what
+        # lets each round get further than the last. Returning [] here instead
+        # would strand the walk at the catalog forever.
+        result = self.cache.get(statement)
+        if result is None:
+            # Safety net. A collect walk can stop early -- on empty rows it may
+            # raise before reaching every query -- and the fixpoint would then
+            # settle without having seen this statement. Rather than silently
+            # returning no rows and corrupting the card, fetch it now. This
+            # costs one process and is the old behaviour, so the worst case is
+            # never worse than before the batching existed.
+            self.live_fetches += 1
+            result = db.run_many([statement])[0]
+            self.cache[statement] = result
+        if not result.ok:
+            raise RuntimeError(result.error)
+        return result.rows
+
+    def flush(self) -> None:
+        if not self.pending:
+            return
+        self.rounds += 1
+        for statement, result in zip(self.pending, db.run_many(self.pending)):
+            self.cache[statement] = result
+        self.pending = []
+
+
+_BATCH = _Batch()
+
+
+def run_sql(sql: str) -> list[dict]:
+    """Return rows for one SELECT, from the batch cache where possible."""
+    return _BATCH.sql(sql)
 
 
 def q(*parts: str) -> str:
@@ -857,7 +908,7 @@ def index_dimension_values(schema: str, table: dict) -> None:
             column["values"] = values
 
 
-def build_card(schema: str, sample_rows: int, verify: bool) -> dict:
+def _build_card_once(schema: str, sample_rows: int, verify: bool) -> dict:
     tables = load_catalog(schema)
     if not tables:
         raise SystemExit(f"schema {schema!r} has no tables visible to this connection")
@@ -894,6 +945,28 @@ def build_card(schema: str, sample_rows: int, verify: bool) -> dict:
         "joins": edges,
         **assessment,
     }
+
+
+MAX_ROUNDS = 12
+
+
+def build_card(schema: str, sample_rows: int, verify: bool) -> dict:
+    """Profile a schema, batching each dependency layer into one process."""
+    _BATCH.reset()
+    for _ in range(MAX_ROUNDS):
+        _BATCH.mode = "collect"
+        try:
+            _build_card_once(schema, sample_rows, verify)
+        except (Exception, SystemExit):
+            # A dry walk sees no rows, so it will raise -- on the first round
+            # the catalog itself looks empty and build_card exits. Discard it:
+            # only the final replay walk, which has real rows, may report.
+            pass
+        if not _BATCH.pending:
+            break
+        _BATCH.flush()
+    _BATCH.mode = "replay"
+    return _build_card_once(schema, sample_rows, verify)
 
 
 def render(card: dict) -> str:
@@ -954,7 +1027,7 @@ def main() -> None:
         cards.append(card)
         print(render(card))
     if args.json:
-        with open(args.json, "w") as handle:
+        with open(args.json, "w", encoding="utf-8") as handle:
             json.dump(cards if len(cards) > 1 else cards[0], handle, indent=2, default=str)
         print(f"written: {args.json}", file=sys.stderr)
 

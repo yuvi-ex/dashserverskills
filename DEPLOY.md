@@ -12,7 +12,7 @@ folder, so read this before handing it to someone else.
 | Data loaded in a schema | the card is built from a live database, never from a file | `exakit status` lists datasets |
 | `dash-server` add-on, running | hosts the dashboard and exposes the MCP control plane | `exakit status` shows `dash-server: running` |
 | The `dash-server` skill | stage 6 drives the control plane through it | listed in the agent's skills |
-| Anthropic API key (optional) | **semantic** text-to-SQL; without it the panel falls back to keyword matching, which fails on plurals, synonyms and intent words | run `./setup-llm-key.sh` |
+| Anthropic API key (optional) | **semantic** text-to-SQL; without it the panel falls back to keyword matching, which fails on plurals, synonyms and intent words | run `python setup_llm_key.py` |
 
 The SQL this skill emits is **Exasol dialect** (`TO_DATE`, `ADD_MONTHS`,
 `DAYS_BETWEEN`). It is portable across datasets, not across databases.
@@ -23,7 +23,7 @@ Run this once, at install time — not after someone has pasted a key into a cha
 window:
 
 ```sh
-./setup-llm-key.sh
+python setup_llm_key.py
 ```
 
 It prompts with the input hidden, refuses anything that is not an `sk-ant-` key,
@@ -79,3 +79,44 @@ Prefer the recipe above.
 The agent loads skills from `.claude/skills/` (or `~/.agents/skills/`). In this
 repository `.claude/` is **gitignored**, so cloning does not deliver the skill —
 ship this folder separately, or un-ignore the path.
+
+## Platforms
+
+One implementation runs everywhere: the installers are Python, which the
+pipeline already requires, so there is no second copy to keep in step.
+
+| Platform | Bootstrap | Notes |
+|---|---|---|
+| macOS | `sh -c "$(curl -fsSL .../get.sh)"` | clipboard via `pbpaste` |
+| Linux | `sh -c "$(curl -fsSL .../get.sh)"` | clipboard via `wl-paste`, `xclip` or `xsel` |
+| WSL | `sh -c "$(curl -fsSL .../get.sh)"` | clipboard read through `powershell.exe Get-Clipboard` |
+| Windows / PowerShell | `irm .../get.ps1 \| iex` | key protected by ACL (`icacls`), not mode bits |
+
+Everything after the clone is `install.py`, `preflight.py` and
+`setup_llm_key.py`. Run any of them directly with whatever interpreter you have;
+none of them assumes the name `python3`, which on Windows can resolve to the
+Microsoft Store stub instead of a real interpreter.
+
+## Known issue: `app_deploy_draft` is blocked on Windows
+
+This one is in dash-server, not in this repo, so the skill cannot fix it.
+
+`app_deploy_draft` runs an `sql_smoke` preflight over every parameterised
+`queries/*.sql`. In `dash_server/exasol/sql_smoke.py`, `collect_sql_files`
+builds its keys with `str(path.relative_to(root))` — OS separators, so
+`queries\business\kpi.sql` on Windows — while `collect_sql_smoke_params`
+normalises the config keys of `queries/sql_smoke.json` to forward slashes and
+prefixes anything not already starting with `queries/`. The two can never match
+on Windows, so every parameterised query reports "Missing values for: f0, f1"
+and live promotion is refused. No `sql_smoke.json` can satisfy it.
+
+Until it is fixed upstream, promote in two steps and check the probe that
+actually exercises the database:
+
+    app_build{name: "<app>"}
+    app_run_healthcheck{name: "<app>"}       # data_layer must pass
+    app_promote_revision{name: "<app>", revision_number: <n>}
+
+`data_layer` runs the real queries against the real profile, so a green
+`data_layer` with a red `sql_smoke` is the signature of this bug rather than of
+a broken dashboard. Do not skip the healthcheck — verify, then promote.

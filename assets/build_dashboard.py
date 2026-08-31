@@ -12,8 +12,22 @@ Nothing here is dataset-specific: every table, column, cast and filter comes
 from the card.
 """
 from __future__ import annotations
-import argparse, json, os, re
+import argparse, json, os, re, sys
 from string import Template
+
+
+def setup_key_command() -> str:
+    """How to invoke the key setup script, spelled for the current platform.
+
+    A bare path works on macOS and Linux but not from PowerShell, and hardcoding
+    "python3" can resolve to the Microsoft Store stub on Windows. `sys.executable`
+    is the interpreter actually running, which is always the right one.
+    """
+    script = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "setup_llm_key.py")
+    quote = '"' if " " in sys.executable or " " in script else ""
+    return f"{quote}{sys.executable}{quote} {quote}{script}{quote}"
 
 
 def entity_noun(model) -> str:
@@ -419,11 +433,14 @@ def read_key():
         info = os.stat(KEY_FILE)
     except OSError:
         return None, None                      # not configured; not an error
-    if info.st_mode & (stat.S_IRGRP | stat.S_IROTH):
+    # POSIX mode bits only. Python on Windows reports st_mode as 0o666 for every
+    # regular file, so this guard would reject every key there and chmod could
+    # not clear it -- Windows protects files with ACLs, not mode bits.
+    if os.name != "nt" and info.st_mode & (stat.S_IRGRP | stat.S_IROTH):
         return None, (f"{KEY_FILE} is readable by other users. "
                       f"Run: chmod 600 {KEY_FILE}")
     try:
-        with open(KEY_FILE) as handle:
+        with open(KEY_FILE, encoding="utf-8") as handle:
             key = handle.read().strip()
     except OSError as exc:
         return None, f"could not read the key file: {exc.strerror}"
@@ -443,9 +460,16 @@ def guard(sql, schema, table, row_cap=500):
         return None, "rejected: only SELECT is allowed"
     if FORBIDDEN.search(text):
         return None, "rejected: contains a data- or schema-modifying keyword"
+    # FROM is also a separator inside EXTRACT/SUBSTRING/TRIM/OVERLAY/POSITION,
+    # where it introduces no table at all: EXTRACT(YEAR FROM "T"."C") would
+    # otherwise be read as schema "T", table "C" and refused. Blank the keyword
+    # out for the scan only; `text` is untouched and is what actually runs.
+    scan = re.sub(r'\\b(?:EXTRACT|SUBSTRING|TRIM|OVERLAY|POSITION)\\s*\\((?:[^()]|\\([^()]*\\))*\\)',
+                  lambda m: re.sub(r'\\bFROM\\b', '____', m.group(0), flags=re.I),
+                  text, flags=re.I | re.S)
     sources = re.findall(r'\\b(?:from|join)\\s+"([A-Za-z0-9_ ]+)"\\s*\\.\\s*"([A-Za-z0-9_ ]+)"',
-                         text, re.I)
-    unqualified = re.findall(r'\\b(?:from|join)\\s+(?!")([A-Za-z0-9_]+)', text, re.I)
+                         scan, re.I)
+    unqualified = re.findall(r'\\b(?:from|join)\\s+(?!")([A-Za-z0-9_]+)', scan, re.I)
     if not sources:
         return None, "rejected: every table must be written as \\"SCHEMA\\".\\"TABLE\\""
     for ref_schema, _ in sources:
@@ -457,7 +481,7 @@ def guard(sql, schema, table, row_cap=500):
     return f"SELECT * FROM ({text}) LIMIT {row_cap}", None
 
 
-def propose_sql(question, schema, table, columns, joins=None):
+def propose_sql(question, schema, table, columns, joins=None, as_of=None):
     """Ask the model for SQL. Returns (sql, error). Not configured -> (None, None)."""
     key, key_error = read_key()
     if key_error:
@@ -483,8 +507,12 @@ def propose_sql(question, schema, table, columns, joins=None):
         f"- Quote every identifier with double quotes.\\n"
         f"- NEVER SUM a column whose additivity is non_additive, attribute or "
         f"count_only. Average those instead.\\n"
-        f"- A semi_additive column may not be summed across time.\\n\\n"
-        f"Question: {question}")
+        f"- A semi_additive column may not be summed across time.\\n"
+        + (f"- This dataset ends on {as_of}. It is historical: CURRENT_DATE and "
+           f"NOW() fall outside it and match no rows. Resolve 'last year', "
+           f"'recent' and similar against {as_of}, with literal dates or "
+           f"ADD_MONTHS(DATE '{as_of}', -n).\\n" if as_of else "")
+        + f"\\nQuestion: {question}")
 
     client = anthropic.Anthropic(api_key=key)
     try:
@@ -1316,11 +1344,31 @@ def leftover_terms(text, measure, dim, hits):
             if w not in QUESTION_NOISE and w not in spoken_words and len(w) > 2]
 
 
+def _as_of(server, metadata):
+    # Newest value of the fact table's time column, or None. Without it the
+    # model answers "last year" with CURRENT_DATE, which on a historical
+    # dataset falls outside the data and returns an empty table that reads
+    # like a real answer. (Comment, not a docstring: this whole module is
+    # itself a triple-quoted template.)
+    if not HAS_TIME or not TIME_EXPR:
+        return None
+    # TIME_EXPR names the fact table by its own name as alias, so the source
+    # has to be aliased the same way for the reference to resolve.
+    source = f'"{SCHEMA}"."{TABLE}" "{TABLE}"'
+    rows, error = _run(server, metadata,
+                       f'SELECT MAX({TIME_EXPR}) AS D FROM {source}')
+    if error or not rows:
+        return None
+    value = rows[0].get("D")
+    return str(value)[:10] if value else None
+
+
 def answer_question(server, metadata, text):
     t = (text or "").strip().lower()
     if not t:
         return None, None, "Ask something like: top 10 <dimension> by <measure>.", None
-    proposed, model_error = _LLM.propose_sql(text, SCHEMA, TABLE, CATALOG, JOINS)
+    proposed, model_error = _LLM.propose_sql(text, SCHEMA, TABLE, CATALOG, JOINS,
+                                             as_of=_as_of(server, metadata))
     if proposed:
         safe, guard_error = _LLM.guard(proposed, SCHEMA, TABLE)
         if guard_error:
@@ -1889,9 +1937,10 @@ def main() -> None:
     ap.add_argument("--title", required=True); ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    card = json.load(open(args.card)); card = card[0] if isinstance(card, list) else card
-    plan = json.load(open(args.plan))
-    signal = json.load(open(args.signal)) if args.signal else {"cut": []}
+    card = json.load(open(args.card, encoding="utf-8")); card = card[0] if isinstance(card, list) else card
+    plan = json.load(open(args.plan, encoding="utf-8"))
+    signal = (json.load(open(args.signal, encoding="utf-8"))
+              if args.signal else {"cut": []})
     m = Model(card, plan)
 
     queries = {"kpi.sql": sql_kpi(m), "composition.sql": sql_composition(m),
@@ -1903,11 +1952,13 @@ def main() -> None:
 
     os.makedirs(os.path.join(args.out, "queries", "business"), exist_ok=True)
     for filename, text in queries.items():
-        open(os.path.join(args.out, "queries", "business", filename), "w").write(text)
+        open(os.path.join(args.out, "queries", "business", filename), "w",
+             encoding="utf-8").write(text)
 
     smoke = {f"queries/business/{k}": {p: "" for p in m.params()}
              for k in queries if "{f0!s}" in queries[k] or "{f1!s}" in queries[k]}
-    open(os.path.join(args.out, "queries", "sql_smoke.json"), "w").write(
+    open(os.path.join(args.out, "queries", "sql_smoke.json"), "w",
+         encoding="utf-8").write(
         json.dumps(smoke, indent=2) + "\n")
 
     refused = [f"{item['decision']['statement']} — " +
@@ -1933,9 +1984,9 @@ def main() -> None:
         filters=repr([c["name"] for c in m.filters]),
         has_time=repr(bool(m.time)),
         time_expr=repr(m.expr(m.time) if m.time else None),
-        setup_key_cmd=repr(os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'setup-llm-key.sh')),
+        # Quoted and prefixed with the running interpreter: a bare path is not
+        # executable on Windows, and "python3" can hit the Microsoft Store stub.
+        setup_key_cmd=repr(setup_key_command()),
         entity_noun=repr(entity_noun(m)),
         refused=repr(refused),
         negatives=repr(plan.get("negative_coverage", [])),
@@ -1951,7 +2002,7 @@ def main() -> None:
         joins=repr([f'JOIN "{step["table"]}" ON "{step["table"]}"."{step["right_col"]}"'
                     f' = "{step["left"]}"."{step["left_col"]}"'
                     for path in m.paths.values() for step in path]))
-    open(os.path.join(args.out, "app.py"), "w").write(app_py)
+    open(os.path.join(args.out, "app.py"), "w", encoding="utf-8").write(app_py)
 
     # Governed consumption outputs: each query becomes a downloadable dataset.
     outputs = [{"id": filename.replace(".sql", ""), "kind": "dataset",
@@ -1965,7 +2016,8 @@ def main() -> None:
                 {"type": "object", "properties": {}},
                 "formats": ["csv", "xlsx"]}
                for filename in queries]
-    open(os.path.join(args.out, "dash-app.json"), "w").write(json.dumps({
+    open(os.path.join(args.out, "dash-app.json"), "w",
+         encoding="utf-8").write(json.dumps({
         "name": args.name, "title": args.title,
         "description": f"Derived for {plan.get('persona')} from {m.schema}.",
         "template": "exasol-analytics",
@@ -1974,11 +2026,14 @@ def main() -> None:
         "consumption": {"outputs": outputs},
     }, indent=2) + "\n")
     os.makedirs(os.path.join(args.out, "assets"), exist_ok=True)
-    open(os.path.join(args.out, "assets", "keep.txt"), "w").write(
+    open(os.path.join(args.out, "assets", "keep.txt"), "w",
+         encoding="utf-8").write(
         "Snapshots written by the Share button land here and are served at "
         "<app>/assets/report.html\n")
-    open(os.path.join(args.out, "llm_sql.py"), "w").write(LLM_MODULE)
-    open(os.path.join(args.out, "requirements.txt"), "w").write(
+    open(os.path.join(args.out, "llm_sql.py"), "w",
+         encoding="utf-8").write(LLM_MODULE)
+    open(os.path.join(args.out, "requirements.txt"), "w",
+         encoding="utf-8").write(
         "dash>=4.0,<5.0\nplotly>=5.18\npyexasol>=2.2.2,<3.0\nanthropic>=1.0\n")
     print(f"workspace written to {args.out}: {len(queries)} queries + app.py + manifest")
 
@@ -1994,7 +2049,7 @@ def main() -> None:
         print("  will match keywords: plurals, synonyms and words like why or worst")
         print("  will not work. It is optional -- everything else runs without it.")
         print()
-        setup = os.path.join(here, "setup-llm-key.sh")
+        setup = setup_key_command()
         print(f"  To enable semantic text-to-SQL, add your own Anthropic key.")
         print(f"  In a terminal, for a hidden prompt:")
         print(f"      {setup}")
