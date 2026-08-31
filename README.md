@@ -98,13 +98,39 @@ Full checklist in **`DEPLOY.md`** — the short version:
    produces nothing.
 3. **The dash-server add-on** — `EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace`
    (never installed by default)
-4. **This skill** — unzip into `.claude/skills/`
+4. **This skill** — the install one-liner above puts it where your agent looks
 5. **A model key, for semantic text-to-SQL** — `python setup_llm_key.py`.
    Optional but strongly recommended: without it the Ask-the-data panel matches
    keywords, and fails on plurals, synonyms and intent words.
 6. **An AI client with shell access** (Claude Code). This skill is
    *agent-operated*: something has to run `exapump`, run the pipeline, and drive
    dash-server's control plane. A chat-only client cannot use it.
+
+## Platforms
+
+One implementation everywhere: the installers are Python, which the pipeline
+already requires, so there is no second copy to drift.
+
+| Platform | Install with |
+|---|---|
+| macOS | `sh -c "$(curl -fsSL .../get.sh)"` |
+| Linux | `sh -c "$(curl -fsSL .../get.sh)"` |
+| WSL | `sh -c "$(curl -fsSL .../get.sh)"` |
+| Windows, Git Bash | the **same line** — Git for Windows ships `sh`, `git` and `curl` |
+| Windows, PowerShell | `irm .../get.ps1 \| iex` |
+
+There is no separate Windows script. `get.sh` covers every platform with a POSIX
+shell, Git Bash included; `get.ps1` exists only for people who have PowerShell
+and no bash.
+
+**Do not paste the `curl` line into PowerShell.** There, `curl` is an alias for
+`Invoke-WebRequest`, which does not accept `-fsSL` and fails with a parameter
+error rather than saying so.
+
+Both bootstraps verify the interpreter by *running* it rather than by finding
+the name: on a Windows machine without Python, `python3` resolves to a Microsoft
+Store stub that opens the Store and exits. Set `DASHSERVER_REPO` to install from
+a branch or a local clone, `DASHSERVER_DIR` to clone elsewhere.
 
 The `dash-server` *skill* arrives with the kit in step 1 — you do not install
 that separately. Read the real port from `exakit info`: the add-on's default is
@@ -151,6 +177,25 @@ answer is easy to produce and hard to notice.
 The card is the only thing consulted about a dataset — not table names, not a
 memory of a similar schema.
 
+Stages 3 and 5 batch their SQL. Each query used to be its own `exapump` process,
+and on TPC-H that was 63 processes taking 8.7s — of which 8.0s (91%) was process
+startup, since the median query took 0.12s against a bare `SELECT 1` baseline of
+0.13s. The queries were free; the spawning was the cost.
+
+| | Before | After |
+|---|---|---|
+| `profile_schema.py` (TPC-H, 8 tables) | 63 processes, 8.7s | **2 processes, 1.9s** |
+| `signal_check.py` | one process per probe | **1 process, 0.48s** |
+
+Profiling cannot simply send everything at once — the catalog decides which
+columns get profiled, and text re-typing decides which get profiled *again*. So
+it walks the build collecting SQL, runs that batch, and walks again, resolving
+one dependency layer per round. And because `exapump` abandons the rest of a
+batch at the first failing statement, `assets/db.py` records the failure,
+re-runs the remainder, and repeats: one process when nothing fails, and never
+worse than the old behaviour when everything does. The resulting schema card is
+byte-identical to the unbatched one.
+
 ## Why it argues with you
 
 The value is in what it refuses.
@@ -185,6 +230,13 @@ universal. The headlines:
 - The SQL is **Exasol dialect**. Portable across datasets, not across databases.
 - The fallback panel queries the fact table only; joined dimensions are
   available to the charts and to the model path.
+- On **Windows**, dash-server's `app_deploy_draft` is blocked by a bug in the
+  add-on, not in this skill: its `sql_smoke` probe builds keys with OS
+  separators (`queries\business\kpi.sql`) but normalises the config keys of
+  `queries/sql_smoke.json` to forward slashes, so no config can ever match and
+  every parameterised query reports "Missing values". Build, confirm the
+  `data_layer` probe passes, then `app_promote_revision`. Full detail in
+  `DEPLOY.md`.
 - Verified on two single-table datasets of opposite shape. Multi-table joins are
   handled by design but were not re-tested after the most recent changes.
 
@@ -205,6 +257,7 @@ assets/profile_schema.py  stage 3 — schema card
 assets/derive_metrics.py  stage 4 — metric grammar and the additivity matrix
 assets/signal_check.py    stage 5 — signal test
 assets/build_dashboard.py stage 6 — Dash app, queries, shareable snapshot
+assets/db.py              batched SQL execution; one process, not one per query
 assets/prelude.py         shared design tokens, so dashboards read as one system
 references/               semantic roles, persona axes, refusal, coverage, scale
 ```
