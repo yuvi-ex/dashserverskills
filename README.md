@@ -11,13 +11,11 @@ first:
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.sh)"
 ```
 
-On Windows, in PowerShell:
+That one line also covers Windows if you use Git Bash, which ships its own
+`sh`, `git` and `curl`.
 
-```powershell
-irm https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.ps1 | iex
-```
-
-On Windows, in PowerShell:
+On Windows with only PowerShell (where `curl` is an alias for `Invoke-WebRequest`
+and will not accept `-fsSL`):
 
 ```powershell
 irm https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.ps1 | iex

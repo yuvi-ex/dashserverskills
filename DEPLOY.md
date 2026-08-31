@@ -90,7 +90,24 @@ pipeline already requires, so there is no second copy to keep in step.
 | macOS | `sh -c "$(curl -fsSL .../get.sh)"` | clipboard via `pbpaste` |
 | Linux | `sh -c "$(curl -fsSL .../get.sh)"` | clipboard via `wl-paste`, `xclip` or `xsel` |
 | WSL | `sh -c "$(curl -fsSL .../get.sh)"` | clipboard read through `powershell.exe Get-Clipboard` |
-| Windows / PowerShell | `irm .../get.ps1 \| iex` | key protected by ACL (`icacls`), not mode bits |
+| Windows, **Git Bash** | `sh -c "$(curl -fsSL .../get.sh)"` | the *same* line as macOS -- Git for Windows ships sh, git and curl |
+| Windows, **PowerShell** | `irm .../get.ps1 \| iex` | key protected by ACL (`icacls`), not mode bits |
+
+There is no separate "Windows script": `get.sh` is the shell bootstrap for every
+platform that has a POSIX shell, Git Bash included. `get.ps1` exists only for
+people who have PowerShell and no bash.
+
+**Do not paste the `curl` line into PowerShell.** There, `curl` is an alias for
+`Invoke-WebRequest`, which does not accept `-fsSL` and fails with an unhelpful
+parameter error rather than saying so. Use `get.ps1`, or spell it `curl.exe` to
+reach the real binary.
+
+Both bootstraps verify the interpreter by running it, not by finding the name:
+on a Windows machine without Python, `python3` resolves to a Microsoft Store
+stub that opens the Store and exits, and `command -v` cannot tell the two apart.
+
+Set `DASHSERVER_REPO` to install from a branch or a local clone, and
+`DASHSERVER_DIR` to clone somewhere other than `~/dashserverskills`.
 
 Everything after the clone is `install.py`, `preflight.py` and
 `setup_llm_key.py`. Run any of them directly with whatever interpreter you have;

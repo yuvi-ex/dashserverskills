@@ -18,7 +18,10 @@
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = 'https://github.com/yuvi-ex/dashserverskills'
+# DASHSERVER_REPO overrides the source, so this bootstrap can be exercised
+# against a branch or a local clone before it is published.
+$Repo = if ($env:DASHSERVER_REPO) { $env:DASHSERVER_REPO }
+        else { 'https://github.com/yuvi-ex/dashserverskills' }
 $Dest = if ($env:DASHSERVER_DIR) { $env:DASHSERVER_DIR }
         else { Join-Path $HOME 'dashserverskills' }
 
