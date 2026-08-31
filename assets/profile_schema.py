@@ -84,7 +84,7 @@ HINTS = {
                       r"per_hour|per_day|per_capita|per_unit)$",
     # Genuine lifecycle words only. category/segment/type/priority are ordinary
     # business dimensions and already classify as categorical on cardinality.
-    "status": r"(_|^)(status|state|flag|stage|phase|disposition)(_|$)",
+    "status": r"(_|^)(status|flag|stage|phase|disposition)(_|$)",
     "effective_from": r"(_|^)(effective_from|valid_from|start_date|startdate|from_date|"
                       r"eff_from|dbt_valid_from)(_|$)",
     "effective_to": r"(_|^)(effective_to|valid_to|end_date|enddate|to_date|expiry|"
