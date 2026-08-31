@@ -11,6 +11,16 @@ first:
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.sh)"
 ```
 
+That one line also covers Windows if you use Git Bash, which ships its own
+`sh`, `git` and `curl`.
+
+On Windows with only PowerShell (where `curl` is an alias for `Invoke-WebRequest`
+and will not accept `-fsSL`):
+
+```powershell
+irm https://raw.githubusercontent.com/yuvi-ex/dashserverskills/main/get.ps1 | iex
+```
+
 ```
 Cloning dashserverskills ... done
 Anthropic API key for text-to-SQL (hidden, Enter to skip):
@@ -30,7 +40,7 @@ Cloning and running the installer yourself is identical:
 
 ```sh
 git clone https://github.com/yuvi-ex/dashserverskills
-cd dashserverskills && ./install.sh
+cd dashserverskills && python install.py
 ```
 
 A bare `git clone` on its own installs nothing and cannot prompt you: git runs
@@ -43,9 +53,9 @@ prompt has nothing to draw on, so pass the key by a route that keeps it out of
 the chat transcript, since a key pasted into one has to be rotated:
 
 ```sh
-pbpaste | ./install.sh              # key on the clipboard, piped in
-./install.sh --clipboard            # read the clipboard directly
-./install.sh --key-file PATH        # read it from a file
+python install.py --clipboard       # read the clipboard directly
+python install.py --key-file PATH   # read it from a file
+<paste> | python install.py         # key piped in on stdin
 ```
 
 Add `--verbose` for every step, `--quiet` for none, `--force` to replace a key
@@ -88,13 +98,39 @@ Full checklist in **`DEPLOY.md`** — the short version:
    produces nothing.
 3. **The dash-server add-on** — `EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace`
    (never installed by default)
-4. **This skill** — unzip into `.claude/skills/`
-5. **A model key, for semantic text-to-SQL** — `./setup-llm-key.sh`.
+4. **This skill** — the install one-liner above puts it where your agent looks
+5. **A model key, for semantic text-to-SQL** — `python setup_llm_key.py`.
    Optional but strongly recommended: without it the Ask-the-data panel matches
    keywords, and fails on plurals, synonyms and intent words.
 6. **An AI client with shell access** (Claude Code). This skill is
    *agent-operated*: something has to run `exapump`, run the pipeline, and drive
    dash-server's control plane. A chat-only client cannot use it.
+
+## Platforms
+
+One implementation everywhere: the installers are Python, which the pipeline
+already requires, so there is no second copy to drift.
+
+| Platform | Install with |
+|---|---|
+| macOS | `sh -c "$(curl -fsSL .../get.sh)"` |
+| Linux | `sh -c "$(curl -fsSL .../get.sh)"` |
+| WSL | `sh -c "$(curl -fsSL .../get.sh)"` |
+| Windows, Git Bash | the **same line** — Git for Windows ships `sh`, `git` and `curl` |
+| Windows, PowerShell | `irm .../get.ps1 \| iex` |
+
+There is no separate Windows script. `get.sh` covers every platform with a POSIX
+shell, Git Bash included; `get.ps1` exists only for people who have PowerShell
+and no bash.
+
+**Do not paste the `curl` line into PowerShell.** There, `curl` is an alias for
+`Invoke-WebRequest`, which does not accept `-fsSL` and fails with a parameter
+error rather than saying so.
+
+Both bootstraps verify the interpreter by *running* it rather than by finding
+the name: on a Windows machine without Python, `python3` resolves to a Microsoft
+Store stub that opens the Store and exits. Set `DASHSERVER_REPO` to install from
+a branch or a local clone, `DASHSERVER_DIR` to clone elsewhere.
 
 The `dash-server` *skill* arrives with the kit in step 1 — you do not install
 that separately. Read the real port from `exakit info`: the add-on's default is
@@ -107,16 +143,16 @@ STARTER_KIT.STORESALES"* — and the agent runs the pipeline. To drive it by han
 
 ```bash
 # 3. profile the schema into a card
-python3 assets/profile_schema.py <SCHEMA> --json card.json
+python assets/profile_schema.py <SCHEMA> --json card.json
 
 # 4. derive metrics for a persona spec you wrote (see references/persona-axes.md)
-python3 assets/derive_metrics.py --card card.json --persona persona.json --json plan.json
+python assets/derive_metrics.py --card card.json --persona persona.json --json plan.json
 
 # 5. cut the metrics that carry no signal
-python3 assets/signal_check.py --card card.json --plan plan.json --json signal.json
+python assets/signal_check.py --card card.json --plan plan.json --json signal.json
 
 # 6. build the workspace
-python3 assets/build_dashboard.py --card card.json --plan plan.json \
+python assets/build_dashboard.py --card card.json --plan plan.json \
     --signal signal.json --name my-dash --title "My Review" --out ./out
 ```
 
@@ -140,6 +176,25 @@ answer is easy to produce and hard to notice.
 
 The card is the only thing consulted about a dataset — not table names, not a
 memory of a similar schema.
+
+Stages 3 and 5 batch their SQL. Each query used to be its own `exapump` process,
+and on TPC-H that was 63 processes taking 8.7s — of which 8.0s (91%) was process
+startup, since the median query took 0.12s against a bare `SELECT 1` baseline of
+0.13s. The queries were free; the spawning was the cost.
+
+| | Before | After |
+|---|---|---|
+| `profile_schema.py` (TPC-H, 8 tables) | 63 processes, 8.7s | **2 processes, 1.9s** |
+| `signal_check.py` | one process per probe | **1 process, 0.48s** |
+
+Profiling cannot simply send everything at once — the catalog decides which
+columns get profiled, and text re-typing decides which get profiled *again*. So
+it walks the build collecting SQL, runs that batch, and walks again, resolving
+one dependency layer per round. And because `exapump` abandons the rest of a
+batch at the first failing statement, `assets/db.py` records the failure,
+re-runs the remainder, and repeats: one process when nothing fails, and never
+worse than the old behaviour when everything does. The resulting schema card is
+byte-identical to the unbatched one.
 
 ## Why it argues with you
 
@@ -175,16 +230,24 @@ universal. The headlines:
 - The SQL is **Exasol dialect**. Portable across datasets, not across databases.
 - The fallback panel queries the fact table only; joined dimensions are
   available to the charts and to the model path.
+- On **Windows**, dash-server's `app_deploy_draft` is blocked by a bug in the
+  add-on, not in this skill: its `sql_smoke` probe builds keys with OS
+  separators (`queries\business\kpi.sql`) but normalises the config keys of
+  `queries/sql_smoke.json` to forward slashes, so no config can ever match and
+  every parameterised query reports "Missing values". Build, confirm the
+  `data_layer` probe passes, then `app_promote_revision`. Full detail in
+  `DEPLOY.md`.
 - Verified on two single-table datasets of opposite shape. Multi-table joins are
   handled by design but were not re-tested after the most recent changes.
 
 ## Files
 
 ```
-get.sh                    the curl one-liner: clone + key + install + verify
-install.sh                one-shot install: skill + key + preflight
-preflight.sh              verify every prerequisite; exit 1 if the demo will break
-setup-llm-key.sh          store the Anthropic key in a 600 file; TTY prompt,
+get.sh                    the curl one-liner (macOS/Linux/WSL): clone, then install.py
+get.ps1                   the same for PowerShell: irm ... | iex
+install.py                one-shot install: skill + key + preflight
+preflight.py              verify every prerequisite; exit 1 if the demo will break
+setup_llm_key.py          store the Anthropic key owner-only; hidden prompt,
                           clipboard, --key-file or piped stdin
 SKILL.md                  the procedure the agent follows
 README.md                 this file
@@ -194,6 +257,7 @@ assets/profile_schema.py  stage 3 — schema card
 assets/derive_metrics.py  stage 4 — metric grammar and the additivity matrix
 assets/signal_check.py    stage 5 — signal test
 assets/build_dashboard.py stage 6 — Dash app, queries, shareable snapshot
+assets/db.py              batched SQL execution; one process, not one per query
 assets/prelude.py         shared design tokens, so dashboards read as one system
 references/               semantic roles, persona axes, refusal, coverage, scale
 ```

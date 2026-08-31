@@ -36,7 +36,7 @@ what stops a revenue persona being served survival flags.
 
 ### 3. Profile the dataset  → `assets/profile_schema.py`
 ```bash
-python3 assets/profile_schema.py <SCHEMA> --json card.json
+python assets/profile_schema.py <SCHEMA> --json card.json
 ```
 Produces a **schema card**: every column's semantic role, additivity class and
 the evidence for both; each table's role and grain; an inferred and
@@ -49,7 +49,7 @@ not your memory of a similar schema.
 
 ### 4. Derive and check coverage  → `assets/derive_metrics.py`
 ```bash
-python3 assets/derive_metrics.py --card card.json --persona persona.json
+python assets/derive_metrics.py --card card.json --persona persona.json
 ```
 Composes candidate metrics from the grammar, refuses what the data cannot
 support, and enforces the additivity legality matrix so an illegal aggregation
@@ -67,7 +67,7 @@ fails without it. Prerequisites and the full recipe → `DEPLOY.md`.
 
 If the build prints that no model key is configured, tell the user — the
 Ask-the-data panel falls back to keyword matching, and the key is theirs to
-supply with `setup-llm-key.sh`. Never use a key of your own on their behalf,
+supply with `setup_llm_key.py`. Never use a key of your own on their behalf,
 and never ask them to paste one into a chat.
 Shared design tokens and helpers so every dashboard reads as one system.
 

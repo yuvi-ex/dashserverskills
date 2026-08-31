@@ -10,20 +10,66 @@ reports the spread. Anything flat is cut, with its numbers, so the flatness can
 be reported as a finding rather than hidden.
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys
+import argparse, json, os, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db  # noqa: E402  -- batching executor, see assets/db.py
 
 FLAT_THRESHOLD = 0.05  # spread below 5% of the mean carries nothing
 
 
+class _Batch:
+    """Run the whole check twice: once to collect SQL, once to read answers.
+
+    Every probe here is one process otherwise, and on a wide plan that is most
+    of the runtime. The two-pass trick avoids restructuring the loops: which
+    queries get issued depends only on the card and the plan, never on what a
+    previous query returned, so walking the same code twice asks for exactly the
+    same SQL both times. The first walk records it and returns nothing; one
+    batch runs it all; the second walk gets the real rows.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.cache: dict[str, db.Result] = {}
+        self.pending: list[str] = []
+        self.mode = "replay"
+        self.live_fetches = 0
+
+    def sql(self, statement: str) -> list[dict]:
+        if self.mode == "collect" and statement not in self.cache:
+            if statement not in self.pending:
+                self.pending.append(statement)
+            return []
+        result = self.cache.get(statement)
+        if result is None:
+            # Safety net: the replay walk asked for something the collect walk
+            # never reached. Fetch it rather than silently reporting "no rows",
+            # which would read as a flat metric and cut it for the wrong reason.
+            self.live_fetches += 1
+            result = db.run_many([statement])[0]
+            self.cache[statement] = result
+        if not result.ok:
+            # Callers already treat a failed probe as "this dimension is not
+            # comparable" and carry on; keep that contract exactly.
+            raise RuntimeError(result.error)
+        return result.rows
+
+    def flush(self) -> None:
+        if not self.pending:
+            return
+        for statement, result in zip(self.pending, db.run_many(self.pending)):
+            self.cache[statement] = result
+        self.pending = []
+
+
+_BATCH = _Batch()
+
+
 def run_sql(sql: str) -> list[dict]:
-    proc = subprocess.run(["exapump", "sql", "-f", "json", sql],
-                          capture_output=True, text=True, timeout=900)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip()[:300])
-    text = proc.stdout
-    start = text.find("\n[")
-    start = start if start != -1 else text.find("[")
-    return json.loads(text[start:].strip()) if start != -1 else []
+    return _BATCH.sql(sql)
 
 
 def q(*parts: str) -> str:
@@ -95,7 +141,7 @@ def check_derived(card: dict, plan: dict, dim_refs: list) -> list:
     return verdicts
 
 
-def check(card: dict, plan: dict) -> dict:
+def _walk(card: dict, plan: dict) -> dict:
     schema = card["schema"]
     dims = [c for t in card["tables"] for c in t["columns"]
             if c["semantic_role"] in ("categorical_dim", "state_flag")
@@ -151,22 +197,36 @@ def check(card: dict, plan: dict) -> dict:
             "cut": [v for v in verdicts if v["signal"] == "CUT"]}
 
 
+def check(card: dict, plan: dict) -> dict:
+    """Collect every probe, run them in one batch, then read the answers."""
+    _BATCH.reset()
+    _BATCH.mode = "collect"
+    try:
+        _walk(card, plan)          # output discarded; this pass only records SQL
+    except RuntimeError:
+        pass                       # nothing can legitimately fail while collecting
+    _BATCH.flush()
+    _BATCH.mode = "replay"
+    return _walk(card, plan)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--card", required=True)
     ap.add_argument("--plan", required=True)
     ap.add_argument("--json")
     args = ap.parse_args()
-    card = json.load(open(args.card))
+    card = json.load(open(args.card, encoding="utf-8"))
     card = card[0] if isinstance(card, list) else card
-    result = check(card, json.load(open(args.plan)))
+    result = check(card, json.load(open(args.plan, encoding="utf-8")))
     for v in result["verdicts"]:
         mark = "CUT " if v["signal"] == "CUT" else "keep"
         print(f"  [{mark}] {v['aggregation']}({v['measure']}) <{v['shape']}>")
         print(f"         {v['detail'][:190]}")
     print(f"\n{len(result['kept'])} kept, {len(result['cut'])} cut for lack of signal")
     if args.json:
-        json.dump(result, open(args.json, "w"), indent=2, default=str)
+        json.dump(result, open(args.json, "w", encoding="utf-8"),
+                  indent=2, default=str)
 
 
 if __name__ == "__main__":

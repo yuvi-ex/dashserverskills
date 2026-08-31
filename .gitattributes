@@ -1,0 +1,19 @@
+# Line endings are stated here rather than left to each contributor's
+# core.autocrlf setting.
+#
+# The repository already stores LF throughout -- this is not repairing damage.
+# It makes that a property of the repo instead of a coincidence: a contributor
+# with core.autocrlf unset or false, editing on Windows, would otherwise commit
+# CRLF, and a shell script whose shebang reads "#!/bin/sh\r" cannot be executed
+# on macOS or Linux (the kernel treats the carriage return as part of the
+# interpreter path and reports "bad interpreter").
+#
+# LF everywhere, including .ps1: PowerShell reads LF without complaint, and one
+# rule is easier to keep true than two. Working copies on Windows are unaffected
+# -- Git Bash, PowerShell and Python all read LF happily.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gz binary
+*.zip binary
