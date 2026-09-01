@@ -100,6 +100,11 @@ def main() -> int:
     print("Preflight: persona-metrics dashboards")
     print(f"  platform: {platform.system()} {platform.release()}"
           f"  python {platform.python_version()}")
+    if os.name == "nt":
+        print("  NOTE: at deploy time, skip app_deploy_draft (its sql_smoke")
+        print("        check cannot pass on Windows) -- use app_build then")
+        print("        app_run_healthcheck then app_promote_revision instead.")
+        print("        See DEPLOY.md, 'The deploy recipe', step 3.")
     print()
 
     # 1. exapump -- every query in stages 3 and 5 goes through it.
