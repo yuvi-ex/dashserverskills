@@ -91,6 +91,43 @@ deploy — healthy on every probe with nothing copied by hand.
 `app_create_from_files` also works, but only if you supply the helper yourself.
 Prefer the recipe above.
 
+## Execution checklist — before you start, and while you build
+
+Two full builds have been timed end-to-end on Windows (a 24-minute run, then a
+19-minute run after the first pass fixed the retry loop below). These are the
+concrete lessons from the difference between them — read this before starting,
+not after something goes wrong the same way again.
+
+- **Never touch `app_deploy_draft` on Windows.** This was the single biggest
+  cost in the first timed run — 5 build/preview/verify cycles fighting a check
+  that structurally cannot pass (see "Known issue" below). The second run used
+  the build → healthcheck → promote sequence from step 3 above and had **zero**
+  wasted rebuilds. This is the one item on this list worth re-reading if a
+  Windows deploy is taking a long time.
+- **Don't rebuild an app just to re-read a failure you already have.** A build
+  call's response already contains the failure detail — re-running it to print
+  that detail again is a wasted cycle, not new information.
+- **If a call seems to hang, check `apps_list` before assuming it failed.**
+  Dependency installs can outrun a tool's own timeout window while still
+  succeeding server-side. Poll rather than retry.
+- **Batch the final verification round.** Promote → start → verify-live →
+  healthcheck were run as 4 separate round trips in both timed builds and were
+  the single slowest remaining step each time (2–3 minutes). If the control
+  plane supports combining any of these, do it — this is the next concrete
+  target for shaving build time, now that the Windows retry loop is fixed.
+
+**Rough time budget**, from the two measured builds, so a large deviation is a
+signal something's wrong rather than "dashboards are just slow":
+
+| Phase | Typical span |
+|---|---|
+| Schema profiling + signal validation (stages 3–5) | ~3 minutes |
+| Writing/retargeting the 8 queries and `app.py` | ~4 minutes once a prior dashboard exists on a similar schema; longer on the first dashboard for a new dataset shape |
+| Build + dependency install + verification round-trips | ~10–13 minutes — the largest and least reducible chunk; this is Docker-style build time, not pipeline time |
+
+A build running well past ~20 minutes on Windows almost always means the
+Windows deploy branch above got skipped, not that something new is wrong.
+
 ## Where the skill has to live
 
 The agent loads skills from `.claude/skills/` (or `~/.agents/skills/`). In this
